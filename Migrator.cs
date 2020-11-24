@@ -171,6 +171,8 @@ namespace Migrate
         protected void Create()
         {
             var builder = new StringBuilder();
+            builder.Append($"USE {targetDb};\n\n");
+
             foreach (var schema in sourceSchemas.Keys)
             {
                 builder.Append(Query.CreateSchema(schema));
@@ -209,6 +211,7 @@ namespace Migrate
         protected void Alter()
         {
             var builder = new StringBuilder();
+            builder.Append($"USE {targetDb};\n\n");
 
             AlterColumns(builder);
 
@@ -566,7 +569,6 @@ namespace Migrate
                     });
                 }
             }
-            //return (toAdd.Count() + toAlter.Count() + toDrop.Count());
         }
 
         private HashSet<string> ConfigureSchemas(ObjectConfiguration configuration, List<string> allSchemas)
