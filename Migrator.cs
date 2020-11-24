@@ -270,14 +270,25 @@ namespace Migrate
 
             foreach (var func in sourceFuncs.Values)
             {
+                if (!ObjectChanged(func, targetFuncs)) {
+                    continue;
+                }
                 builder.Append(Query.AlterFunc(func));
             }
             foreach (var view in sourceViews.Values)
             {
+                if (!ObjectChanged(view, targetViews))
+                {
+                    continue;
+                }
                 builder.Append(Query.AlterView(view));
             }
             foreach (var proc in sourceProcs.Values)
             {
+                if (!ObjectChanged(proc, targetProcs))
+                {
+                    continue;
+                }
                 builder.Append(Query.AlterProc(proc));
             }
 
@@ -473,21 +484,6 @@ namespace Migrate
             targetTableTypes = Helpers.ExecuteCommand<SysTableType>(targetCmd, targetConn).ToDictionary(p => p.object_id);
         }
 
-        private void LoadFunctions()
-        {
-            var sourceCmd = new SqlCommand(Query.GetFunctions(sourceSchemaIds));
-            var targetCmd = new SqlCommand(Query.GetFunctions(targetSchemaIds));
-            sourceFuncs = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
-            targetFuncs = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
-        }
-
-        private void LoadProcedures()
-        {
-            var cmd = new SqlCommand(Query.GetStoredProcedures());
-            sourceProcs = Helpers.ExecuteCommand<SysObject>(cmd, sourceConn).ToDictionary(p => p.object_id);
-            targetProcs = Helpers.ExecuteCommand<SysObject>(cmd, targetConn).ToDictionary(p => p.object_id);
-        }
-
         private void LoadConstraints()
         {
             var sourceCmd = new SqlCommand(Query.GetConstraints(sourceSchemaIds));
@@ -496,12 +492,33 @@ namespace Migrate
             targetConstraints = Helpers.ExecuteCommand<SysConstraint>(targetCmd, targetConn).ToDictionary(p => p.object_id);
         }
 
+        private void LoadFunctions()
+        {
+            var sourceCmd = new SqlCommand(Query.GetFunctions(sourceSchemaIds));
+            var targetCmd = new SqlCommand(Query.GetFunctions(targetSchemaIds));
+            sourceFuncs = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
+            targetFuncs = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
+            MapSourceObjects(sourceFuncs.Values);
+            MapTargetObjects(targetFuncs.Values);
+        }
+
+        private void LoadProcedures()
+        {
+            var cmd = new SqlCommand(Query.GetStoredProcedures());
+            sourceProcs = Helpers.ExecuteCommand<SysObject>(cmd, sourceConn).ToDictionary(p => p.object_id);
+            targetProcs = Helpers.ExecuteCommand<SysObject>(cmd, targetConn).ToDictionary(p => p.object_id);
+            MapSourceObjects(sourceProcs.Values);
+            MapTargetObjects(targetProcs.Values);
+        }
+
         private void LoadViews()
         {
             var sourceCmd = new SqlCommand(Query.GetViews(sourceSchemaIds));
             var targetCmd = new SqlCommand(Query.GetViews(targetSchemaIds));
             sourceViews = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
             targetViews = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
+            MapSourceObjects(sourceViews.Values);
+            MapTargetObjects(targetViews.Values);
         }
 
         // drop/rename/alter any columns
@@ -589,6 +606,38 @@ namespace Migrate
                     schemas.AddRange(allSchemas.Except(configuration.Exclude));
                 }
                 return schemas.ToHashSet();
+            }
+        }
+
+        private void MapSourceObjects(IEnumerable<SysObject> objects)
+        {
+            MapObjects(objects, sourceObjects, sourceTypes);
+        }
+
+        private void MapTargetObjects(IEnumerable<SysObject> objects)
+        {
+            MapObjects(objects, targetObjects, targetTypes);
+        }
+
+        private void MapObjects(IEnumerable<SysObject> objects, Dictionary<string, string> objectDict, Dictionary<string, string> typeDict)
+        {
+            foreach (var @object in objects)
+            {
+                objectDict[@object.qualified_name] = @object.object_id;
+                typeDict[@object.object_id] = @object.type;
+            }
+        }
+
+        private bool ObjectChanged(SysObject @object, Dictionary<string, SysObject> targetSet)
+        {
+            if (!targetSet.ContainsKey(@object.qualified_name))
+            {
+                return false;
+            }
+            else
+            {
+                var targetObject = targetSet[@object.qualified_name];
+                return targetObject.modify_date.HasValue && @object.modify_date > targetObject.modify_date;
             }
         }
     }
