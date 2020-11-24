@@ -13,7 +13,7 @@ The scripts are idempotent, meaning you can rerun them with no side-effects.
 
 **create.sql**: runs conditional CREATE statements for schemas, tables, functions, indexes, views, and stored procedures  
 
-**alter.sql**: runs conditional ALTER statements for columns (DROP, ADD, ALTER) + constraints, always runs ALTER on functions, views, and stored procedures  
+**alter.sql**: runs conditional ALTER statements for columns (DROP, ADD, ALTER) + constraints, runs ALTER on functions, views, and stored procedures where the source is ahead of the target  
 
 **seed.sql**: runs conditional INSERT statements for tables in the schemas specified by Appsettings.Data.Schemas  
 
