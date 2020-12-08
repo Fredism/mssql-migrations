@@ -150,7 +150,7 @@ namespace Migrate
             return string.Join("\n", new string[]
             {
                 $"ALTER TABLE {column.qualified_table_name}",
-                $"DROP [{column.name}]\n"
+                $"DROP COLUMN [{column.name}]\n"
             });
         }
         public static string AddPrimaryKey(SysConstraint key)
