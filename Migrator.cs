@@ -137,6 +137,7 @@ namespace Migrate
         public void Migrate()
         {
             Load();
+            Patch();
             Create();
             Alter();
             Seed();
@@ -213,8 +214,6 @@ namespace Migrate
             var builder = new StringBuilder();
             builder.Append($"USE {targetDb};\n\n");
 
-            AlterColumns(builder);
-
             // constraints
             var allConstraints = sourceConstraints.Values;
             var primaryKeys = allConstraints.Where(c => c.type == Enumerations.GetDescription(SQLTypes.PrimaryKey));
@@ -247,27 +246,13 @@ namespace Migrate
             }
 
             // foreign keys
-            var excluded = targetKeys.Values.Select(k => k.qualified_name).Except(sourceKeys.Values.Select(k => k.qualified_name));
-            var toDrop = excluded.Where(keyName =>
-            {
-                var targetId = targetObjects[keyName];
-                var targetKey = targetKeys[targetId];
-
-                return sourceKeys.Values.Any(key => key.qualified_parent_table == targetKey.qualified_parent_table
-                    && key.qualified_referenced_table == targetKey.qualified_referenced_table);
-            }).Select(keyName => targetKeys[targetObjects[keyName]]);
-
-            foreach (var key in toDrop)
-            {
-                builder.Append(Query.DropForeignKey(key));
-                builder.Append("GO\n\n");
-            }
             foreach (var key in sourceKeys.Values)
             {
                 builder.Append(Query.AddForeignKey(key));
                 builder.Append("GO\n\n");
             }
 
+            // funcs
             foreach (var func in sourceFuncs.Values)
             {
                 if (!ObjectChanged(func, targetFuncs)) {
@@ -275,6 +260,7 @@ namespace Migrate
                 }
                 builder.Append(Query.AlterFunc(func));
             }
+            // views
             foreach (var view in sourceViews.Values)
             {
                 if (!ObjectChanged(view, targetViews))
@@ -283,6 +269,7 @@ namespace Migrate
                 }
                 builder.Append(Query.AlterView(view));
             }
+            // procs
             foreach (var proc in sourceProcs.Values)
             {
                 if (!ObjectChanged(proc, targetProcs))
@@ -398,6 +385,97 @@ namespace Migrate
             }
 
             File.WriteAllText($"{path}\\update.sql", builder.ToString());
+        }
+
+        protected void Patch()
+        {
+            var builder = new StringBuilder();
+            var opening = $"USE {targetDb};\n\n";
+            builder.Append(opening);
+
+            PatchColumns(builder);
+
+            var excluded = targetKeys.Values.Select(k => k.qualified_name).Except(sourceKeys.Values.Select(k => k.qualified_name));
+            var toDrop = targetKeys.Values.Where(k => excluded.Contains(k.qualified_name));
+            foreach (var key in toDrop)
+            {
+                builder.Append(Query.DropForeignKey(key));
+                builder.Append("GO\n\n");
+            }
+
+            if (builder.ToString() == opening)
+            {
+                builder.Append("-- Nothing to patch. --");
+            }
+
+            File.WriteAllText($"{path}\\patch.sql", builder.ToString());
+        }
+
+        // drop/add/alter any columns
+        private void PatchColumns(StringBuilder builder)
+        {
+            var source = sourceObjects.Keys.ToHashSet();
+            var target = targetObjects.Keys.ToHashSet();
+            var intersect = source.Intersect(target);
+
+            foreach (var tableName in intersect)
+            {
+                var sourceId = sourceObjects[tableName];
+                if (sourceTypes[sourceId] != Enumerations.GetDescription(SQLTypes.UserTable))
+                    continue;
+                var sourceCols = sourceColumns[sourceId];
+
+                var targetId = targetObjects[tableName];
+                var targetCols = targetColumns[targetId];
+
+                var sourceColDictionary = sourceCols.ToDictionary(c => c.name);
+                var targetColDictionary = targetCols.ToDictionary(c => c.name);
+
+                var toAdd = new List<SysColumn>();
+                var toAlter = new List<SysColumn>();
+                var toDrop = targetCols.Where(c => !sourceColDictionary.ContainsKey(c.name)).ToList();
+
+                foreach (var column in sourceCols)
+                {
+                    // target doesn't have column 
+                    if (!targetColDictionary.ContainsKey(column.name))
+                    {
+                        toAdd.Add(column);
+                    }
+                    // column name exists in target, check for changes
+                    else
+                    {
+                        var sourceColumn = column;
+                        var targetColumn = targetColDictionary[column.name];
+                        if (sourceColumn.data_type != targetColumn.data_type
+                            || sourceColumn.max_length != targetColumn.max_length
+                            || sourceColumn.is_nullable != targetColumn.is_nullable)
+                        {
+                            toAlter.Add(column);
+                        }
+                    }
+                }
+
+                if (toAdd.Count() > 0 || toAlter.Count() > 0 || toDrop.Count() > 0)
+                {
+                    builder.Append($"-- {tableName} --\n");
+                    toDrop.ForEach(column =>
+                    {
+                        builder.Append(Query.DropColumn(column));
+                        builder.Append("GO\n\n");
+                    });
+                    toAdd.ForEach(column =>
+                    {
+                        builder.Append(Query.AddColumn(column));
+                        builder.Append("GO\n\n");
+                    });
+                    toAlter.ForEach(column =>
+                    {
+                        builder.Append(Query.AlterColumn(column));
+                        builder.Append("GO\n\n");
+                    });
+                }
+            }
         }
 
         private int GetDatabaseId(string name, string conn)
@@ -519,73 +597,6 @@ namespace Migrate
             targetViews = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
             MapSourceObjects(sourceViews.Values);
             MapTargetObjects(targetViews.Values);
-        }
-
-        // drop/rename/alter any columns
-        private void AlterColumns(StringBuilder builder)
-        {
-            var source = sourceObjects.Keys.ToHashSet();
-            var target = targetObjects.Keys.ToHashSet();
-            var intersect = source.Intersect(target);
-
-            foreach (var tableName in intersect)
-            {
-                var sourceId = sourceObjects[tableName];
-                if (sourceTypes[sourceId] != Enumerations.GetDescription(SQLTypes.UserTable))
-                    continue;
-                var sourceCols = sourceColumns[sourceId];
-
-                var targetId = targetObjects[tableName];
-                var targetCols = targetColumns[targetId];
-
-                var sourceColDictionary = sourceCols.ToDictionary(c => c.name);
-                var targetColDictionary = targetCols.ToDictionary(c => c.name);
-
-                var toAdd = new List<SysColumn>();
-                var toAlter = new List<SysColumn>();
-                var toDrop = targetCols.Where(c => !sourceColDictionary.ContainsKey(c.name)).ToList();
-
-                foreach (var column in sourceCols)
-                {
-                    // target doesn't have column 
-                    if (!targetColDictionary.ContainsKey(column.name))
-                    {
-                        toAdd.Add(column);
-                    }
-                    // column name exists in target, check for changes
-                    else
-                    {
-                        var sourceColumn = column;
-                        var targetColumn = targetColDictionary[column.name];
-                        if (sourceColumn.data_type != targetColumn.data_type
-                            || sourceColumn.max_length != targetColumn.max_length
-                            || sourceColumn.is_nullable != targetColumn.is_nullable)
-                        {
-                            toAlter.Add(column);
-                        }
-                    }
-                }
-
-                if (toAdd.Count() > 0 || toAlter.Count() > 0 || toDrop.Count() > 0)
-                {
-                    builder.Append($"-- {tableName} --\n");
-                    toDrop.ForEach(column =>
-                    {
-                        builder.Append(Query.DropColumn(column));
-                        builder.Append("GO\n\n");
-                    });
-                    toAdd.ForEach(column =>
-                    {
-                        builder.Append(Query.AddColumn(column));
-                        builder.Append("GO\n\n");
-                    });
-                    toAlter.ForEach(column =>
-                    {
-                        builder.Append(Query.AlterColumn(column));
-                        builder.Append("GO\n\n");
-                    });
-                }
-            }
         }
 
         private HashSet<string> ConfigureSchemas(ObjectConfiguration configuration, List<string> allSchemas)
