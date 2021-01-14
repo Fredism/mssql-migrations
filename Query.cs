@@ -164,6 +164,17 @@ namespace Migrate
                 "END\n"
             });
         }
+        public static string DropPrimaryKey(SysConstraint key)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"IF (OBJECT_ID('{key.qualified_name}') IS NOT NULL)",
+                "BEGIN",
+                $"\tALTER TABLE {key.qualified_table_name}",
+                $"\tDROP CONSTRAINT [{key.name}]",
+                "END\n"
+            });
+        }
         public static string AddForeignKey(SysForeignKey key)
         {
             return string.Join("\n", new string[]
@@ -387,6 +398,7 @@ namespace Migrate
                 select
 	                pk.name,
 	                pk.object_id,
+                    pk.parent_object_id,
 	                schema_name = object_schema_name(pk.object_id),
 	                table_name = object_name(pk.parent_object_id),
 	                pk.type,
@@ -407,6 +419,7 @@ namespace Migrate
                 select
 	                uq.name,
 	                uq.object_id,
+                    uq.parent_object_id,
 	                schema_name = schema_name(uq.schema_id),
 	                table_name = object_name(uq.parent_object_id),
 	                uq.type,
@@ -431,6 +444,7 @@ namespace Migrate
                 select
 	                dc.name,
 	                dc.object_id,
+                    dc.parent_object_id,
 	                schema_name = object_schema_name(dc.object_id),
 	                table_name = object_name(dc.parent_object_id),
 	                type = rtrim(dc.type),
@@ -447,6 +461,7 @@ namespace Migrate
                 select
 	                name,
 	                object_id,
+                    parent_object_id,
 	                schema_name = schema_name(schema_id),
 	                table_name = object_name(parent_object_id),
 	                type = rtrim(type),

@@ -8,6 +8,7 @@ namespace Migrate.Models
     {
         public string name { get; set; }
         public string object_id { get; set; }
+        public string parent_object_id { get; set; }
         public string schema_name { get; set; }
         public string table_name { get; set; }
         public string type { get; set; }

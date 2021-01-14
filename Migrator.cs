@@ -458,6 +458,10 @@ namespace Migrate
                 if (toAdd.Count() > 0 || toAlter.Count() > 0 || toDrop.Count() > 0)
                 {
                     builder.Append($"-- {tableName} --\n");
+
+                    var targetObjConstraints = targetConstraints.Values.Where(c => c.parent_object_id == targetId);
+                    var primaryKey = targetObjConstraints.Where(c => c.type == Enumerations.GetDescription(SQLTypes.PrimaryKey)).FirstOrDefault();
+
                     toDrop.ForEach(column =>
                     {
                         builder.Append(Query.DropColumn(column));
@@ -470,11 +474,25 @@ namespace Migrate
                     });
                     toAlter.ForEach(column =>
                     {
+                        if(DependsOn(primaryKey, column)) {
+                            builder.Append(Query.DropPrimaryKey(primaryKey));
+                            builder.Append("GO\n\n");
+                        }
                         builder.Append(Query.AlterColumn(column));
                         builder.Append("GO\n\n");
                     });
                 }
             }
+        }
+
+        private bool DependsOn(SysConstraint constraint, SysColumn column)
+        {
+            if (constraint == null) return false;
+            else if (constraint.columns.Contains(",") && constraint.columns.Split(",").Contains(column.name)) 
+                return true;
+            else if (constraint.columns == column.name) return true;
+
+            return false;
         }
 
         private int GetDatabaseId(string name, string conn)
