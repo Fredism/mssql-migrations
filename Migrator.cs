@@ -448,9 +448,7 @@ namespace Migrate
                     {
                         var sourceColumn = column;
                         var targetColumn = targetColDictionary[column.name];
-                        if (sourceColumn.data_type != targetColumn.data_type
-                            || sourceColumn.max_length != targetColumn.max_length
-                            || sourceColumn.is_nullable != targetColumn.is_nullable)
+                        if (sourceColumn.type_definition != targetColumn.type_definition)
                         {
                             toAlter.Add(column);
                         }

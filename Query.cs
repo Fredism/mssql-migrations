@@ -268,7 +268,12 @@ namespace Migrate
 		            object_name = object_name(c.object_id),
 		            schema_name = object_schema_name(c.object_id),
 		            data_type = type_name(c.user_type_id),
-		            max_length = case when type_name(c.user_type_id) = 'datetime2' then scale else max_length end,
+		            max_length = case 
+                        when type_name(c.user_type_id) = 'datetime2' then scale
+						when type_name(c.user_type_id) like 'n%char%' and max_length <> -1 then max_length / 2
+                        else max_length end,
+                    precision = c.precision,
+					scale = c.scale,
 		            is_nullable,
 		            is_identity,
 		            primary_key = i.name,

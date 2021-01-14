@@ -13,6 +13,8 @@ namespace Migrate.Models
         public string schema_name { get; set; }
         public string data_type { get; set; }
         public string max_length { get; set; }
+        public string precision { get; set; }
+        public string scale { get; set; }
         public string is_nullable { get; set; }
         public string is_identity { get; set; }
         public string primary_key { get; set; }
@@ -33,9 +35,15 @@ namespace Migrate.Models
         {
             get
             {
-                bool hasLength = data_type.Contains("varchar") || data_type == "datetime2";
+                bool hasLength = data_type.Contains("char") || data_type == "datetime2" || data_type == "varbinary";
+                bool hasPrecision = data_type == "decimal" || data_type == "numeric" || data_type == "float";
+                bool hasScale = hasPrecision && data_type != "float";
                 string maxLength = max_length == "-1" ? "max" : max_length;
-                return $"[{data_type}]" + (!string.IsNullOrEmpty(maxLength) && hasLength ? $"({maxLength})" : "");
+                string size =
+                    hasLength && !string.IsNullOrEmpty(maxLength) ? $"({maxLength})" :
+                    hasPrecision ? hasPrecision && hasScale ? $"({precision}, {scale})" : $"({precision})" :
+                    string.Empty;
+                return $"[{data_type}]" + size;
             }
         }
 
