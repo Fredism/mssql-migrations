@@ -350,8 +350,9 @@ namespace Migrate
             if (toUpdate.Count() > 0)
             {
                 builder.Append(Query.ToggleIdInsertForEach("OFF"));
-
-                builder.Append(Query.ToggleConstraintForEach(false) + "\n\n");
+                builder.Append(Query.ToggleConstraintForEach(false));
+                builder.Append(Query.SetNoCount("ON"));
+                builder.Append($"\n{Query.BatchSeperator}");
             }
             else
             {
@@ -374,9 +375,9 @@ namespace Migrate
                 rows.ForEach(row =>
                 {
                     builder.Append(Query.UpdateIf(table, columns, row));
-                    builder.Append("\nGO\n\n");
+                    builder.Append(Query.BatchSeperator);
                 });
-                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF"));
+                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF") + "\n");
             };
 
             if (toUpdate.Count() > 0)

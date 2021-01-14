@@ -10,6 +10,7 @@ namespace Migrate
 {
     class Query
     {
+        public static readonly string BatchSeperator = "GO\n\n";
         // create
         public static string CreateSchema(string schema)
         {
@@ -524,11 +525,15 @@ namespace Migrate
         }
 
         // misc
+        public static string SetNoCount(string onOff)
+        {
+            return $"SET NOCOUNT {onOff}\n";
+        }
         public static string ToggleConstraintForEach(bool check)
         {
             return !check ?
-                "EXEC sp_msforeachtable \"ALTER TABLE ? NOCHECK CONSTRAINT all\""
-                : "EXEC sp_msforeachtable \"ALTER TABLE ? WITH CHECK CHECK CONSTRAINT all\"";
+                "EXEC sp_msforeachtable \"ALTER TABLE ? NOCHECK CONSTRAINT all\"\n"
+                : "EXEC sp_msforeachtable \"ALTER TABLE ? WITH CHECK CHECK CONSTRAINT all\"\n";
         }
 
         public static string ToggleIdInsertForEach(string onOff)
@@ -538,8 +543,7 @@ namespace Migrate
                 //$"EXEC sp_msforeachtable @command1 = \"PRINT '?'; SET IDENTITY_INSERT ? {onOff}\",",
                 $"EXEC sp_msforeachtable @command1 = \"SET IDENTITY_INSERT ? {onOff}\",",
                 "@whereand = ' AND EXISTS (SELECT 1 from sys.columns WHERE object_id = o.id",
-                "AND is_identity = 1) and o.type = ''U'''",
-                "\n\n"
+                "AND is_identity = 1) and o.type = ''U'''\n",
             });
         }
 
