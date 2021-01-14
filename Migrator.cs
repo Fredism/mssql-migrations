@@ -393,8 +393,7 @@ namespace Migrate
             var opening = $"USE {targetDb};\n\n";
             builder.Append(opening);
 
-            PatchColumns(builder);
-
+            // drop foreign keys not in source
             var excluded = targetKeys.Values.Select(k => k.qualified_name).Except(sourceKeys.Values.Select(k => k.qualified_name));
             var toDrop = targetKeys.Values.Where(k => excluded.Contains(k.qualified_name));
             foreach (var key in toDrop)
@@ -402,6 +401,8 @@ namespace Migrate
                 builder.Append(Query.DropForeignKey(key));
                 builder.Append("GO\n\n");
             }
+
+            PatchColumns(builder);
 
             if (builder.ToString() == opening)
             {
