@@ -6,6 +6,28 @@ namespace Migrate.Models
 {
     class SysColumn
     {
+        public static SysColumn DeepClone(SysColumn og)
+        {
+            SysColumn clone = new SysColumn();
+            clone.name = og.name;
+            clone.object_id = og.object_id;
+            clone.object_name = og.object_name;
+            clone.schema_id = og.schema_id;
+            clone.schema_name = og.schema_name;
+            clone.data_type = og.data_type;
+            clone.max_length = og.max_length;
+            clone.precision = og.precision;
+            clone.scale = og.scale;
+            clone.is_nullable = og.is_nullable;
+            clone.is_identity = og.is_identity;
+            clone.primary_key = og.primary_key;
+            clone.index_type_desc = og.index_type_desc;
+            clone.generated_always_type = og.generated_always_type;
+            clone.default_constraint_name = og.default_constraint_name;
+            clone.default_constraint_definition = og.default_constraint_definition;
+
+            return clone;
+        }
         public string name { get; set; }
         public string object_id { get; set; }
         public string object_name { get; set; }
@@ -61,11 +83,15 @@ namespace Migrate.Models
             }
         }
 
+        public bool isNullable
+        {
+            get { return Convert.ToBoolean(is_nullable); }
+        }
+
         public string nullability
         {
             get
             {
-                bool isNullable = Convert.ToBoolean(is_nullable);
                 return (isNullable ? "" : "NOT ") + "NULL";
             }
         }

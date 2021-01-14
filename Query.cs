@@ -4,6 +4,7 @@ using System.Text;
 using System.Linq;
 using Migrate.Models;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Primitives;
 
 namespace Migrate
 {
@@ -49,13 +50,13 @@ namespace Migrate
                 "BEGIN",
                     $"\tCREATE TABLE {table.qualified_name} (",
                     string.Join(",\n", columns.Select(column => "\t\t" + column.column_definition)),
-                    
+
             };
-            if(pKey != null)
+            if (pKey != null)
             {
                 cmd.Add($"\t\tCONSTRAINT [{pKey.primary_key}] PRIMARY KEY {pKey.index_type_desc} ( [{pKey.name}] ASC )");
             }
-            if(table.history_table != null)
+            if (table.history_table != null)
             {
                 var rowStart = columns.Find(c => c.generated_always_type == "1").name;
                 var rowEnd = columns.Find(c => c.generated_always_type == "2").name;
@@ -80,7 +81,7 @@ namespace Migrate
             {
                 $"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = '{index.name}' and object_id = OBJECT_ID('{index.qualified_table_name}'))",
                 $"CREATE {index.type_desc} INDEX [{index.name}] ON {index.qualified_table_name} {index.columns}",
-                (index.include == null? "": $"INCLUDE {index.include}\n") + "GO\n\n" 
+                (index.include == null? "": $"INCLUDE {index.include}\n") + "GO\n\n"
             });
         }
         public static string CreateTableType(SysTableType tt)
@@ -339,7 +340,7 @@ namespace Migrate
 	                case when c.is_nullable = 1 then '' else 'not ' end + 'null', ', ')
 	                from sys.table_types tt
 	                join sys.columns c on c.object_id = tt.type_table_object_id
-                    {(schemas == null? "": $"where tt.schema_id in ({string.Join(", ", schemas)})")}
+                    {(schemas == null ? "" : $"where tt.schema_id in ({string.Join(", ", schemas)})")}
 	                group by tt.type_table_object_id, tt.name, tt.schema_id
             ";
         }
@@ -529,6 +530,7 @@ namespace Migrate
                 "EXEC sp_msforeachtable \"ALTER TABLE ? NOCHECK CONSTRAINT all\""
                 : "EXEC sp_msforeachtable \"ALTER TABLE ? WITH CHECK CHECK CONSTRAINT all\"";
         }
+
         public static string ToggleIdInsertForEach(string onOff)
         {
             return string.Join("\n", new string[]
@@ -546,6 +548,16 @@ namespace Migrate
             return string.Join("\n", new string[]
             {
                 $"SET IDENTITY_INSERT {table} {onOff}\n",
+            });
+        }
+
+        public static string UpdateIfNull(SysColumn column, string value = null)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"UPDATE {column.qualified_table_name}",
+                $"SET {column.name} = { value ?? DefaultValue(column.data_type) }",
+                $"WHERE {column.name} IS NULL\n"
             });
         }
 
@@ -609,6 +621,33 @@ namespace Migrate
         {
             return schemas == null ?
                         "" : $"and schema_id in ({string.Join(", ", schemas)})";
+        }
+        private static string DefaultValue(string data_type)
+        {
+            switch(data_type)
+            {
+                case "bit":
+                case "tinyint":
+                case "smallint":
+                case "int":
+                case "bigint":
+                case "decimal":
+                case "numeric":
+                case "smallmoney":
+                case "money":
+                case "float":
+                case "real":
+                    return "0";
+                case "datetime":
+                case "datetime2":
+                case "smalldatetime":
+                case "date":
+                case "time":
+                case "datetimeoffset":
+                    return "'1970-01-01 00:00:00.000'";
+                default:
+                    return "''";
+            }
         }
         private static string ConvertObject(object data)
         {

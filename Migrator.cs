@@ -424,38 +424,25 @@ namespace Migrate
                 var sourceId = sourceObjects[tableName];
                 if (sourceTypes[sourceId] != Enumerations.GetDescription(SQLTypes.UserTable))
                     continue;
-                var sourceCols = sourceColumns[sourceId];
 
                 var targetId = targetObjects[tableName];
+
+                var sourceCols = sourceColumns[sourceId];
                 var targetCols = targetColumns[targetId];
 
                 var sourceColDictionary = sourceCols.ToDictionary(c => c.name);
                 var targetColDictionary = targetCols.ToDictionary(c => c.name);
 
-                var toAdd = new List<SysColumn>();
-                var toAlter = new List<SysColumn>();
                 var toDrop = targetCols.Where(c => !sourceColDictionary.ContainsKey(c.name)).ToList();
-
-                foreach (var column in sourceCols)
+                var toAdd = sourceCols.Where(c => !targetColDictionary.ContainsKey(c.name)).ToList();
+                var toAlter = sourceCols.Where(source =>
                 {
-                    // target doesn't have column 
-                    if (!targetColDictionary.ContainsKey(column.name))
-                    {
-                        toAdd.Add(column);
-                    }
-                    // column name exists in target, check for changes
-                    else
-                    {
-                        var sourceColumn = column;
-                        var targetColumn = targetColDictionary[column.name];
-                        if (sourceColumn.type_definition != targetColumn.type_definition)
-                        {
-                            toAlter.Add(column);
-                        }
-                    }
-                }
+                    if (!targetColDictionary.ContainsKey(source.name)) return false;
+                    var target = targetColDictionary[source.name];
+                    return source.type_definition != target.type_definition;
+                }).ToList();
 
-                if (toAdd.Count() > 0 || toAlter.Count() > 0 || toDrop.Count() > 0)
+                if (toDrop.Any() || toAdd.Any() || toAlter.Any())
                 {
                     builder.Append($"-- {tableName} --\n");
 
@@ -469,8 +456,21 @@ namespace Migrate
                     });
                     toAdd.ForEach(column =>
                     {
-                        builder.Append(Query.AddColumn(column));
-                        builder.Append("GO\n\n");
+                        if (column.isNullable)
+                        {
+                            builder.Append(Query.AddColumn(column));
+                            builder.Append("GO\n\n");
+                        }
+                        else
+                        {
+                            var nullable = SysColumn.DeepClone(column);
+                            nullable.is_nullable = "true";
+                            builder.Append(Query.AddColumn(nullable));
+                            builder.Append("GO\n\n");
+                            builder.Append(Query.UpdateIfNull(column));
+                            builder.Append("GO\n\n");
+                            toAlter.Add(column);
+                        }
                     });
                     toAlter.ForEach(column =>
                     {
