@@ -2,11 +2,7 @@ Creates scripts to migrate database models and data from a source db to a target
 
 Generates 5 scripts:
 
-patch.sql
-create.sql
-seed.sql
-update.sql
-alter.sql
+patch.sql | create.sql | seed.sql | update.sql | alter.sql
 
 To be run in that order. 
 
