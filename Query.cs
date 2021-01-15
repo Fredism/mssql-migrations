@@ -554,6 +554,17 @@ namespace Migrate
                 $"SET IDENTITY_INSERT {table} {onOff}\n",
             });
         }
+        
+        public static RowCollection ConvertRows(List<Dictionary<string, object>> rows)
+        {
+            var result = new RowCollection();
+            foreach(var row in rows)
+            {
+                var rowData = row.ToDictionary(pair => pair.Key, pair => ConvertObject(pair.Value));
+                result.Add(rowData);
+            }
+            return result;
+        }
 
         public static string UpdateIfNull(SysColumn column, string value = null)
         {
@@ -565,24 +576,24 @@ namespace Migrate
             });
         }
 
-        public static string UpdateIf(SysTable table, IEnumerable<SysColumn> columns, IDictionary<string, object> data)
+        public static string UpdateIf(SysTable table, IEnumerable<SysColumn> columns, IDictionary<string, string> data)
         {
             var pKey = columns.ToList().Find(c => c.primary_key != null);
             var pKeyColumn = pKey.name;
-            var pKeyValue = ConvertObject(data[pKeyColumn]);
+            var pKeyValue = data[pKeyColumn];
             return string.Join("\n", new string[]
             {
                 $"IF NOT EXISTS (SELECT {pKeyColumn} FROM {table.qualified_name} WHERE {pKeyColumn} = {pKeyValue})",
                 $"\tINSERT INTO {table.qualified_name} ({string.Join(", ", columns.Select(c => c.name))})",
-                $"\tVALUES ({string.Join(", ", columns.Select(c => ConvertObject(data[c.name])))})",
+                $"\tVALUES ({string.Join(", ", columns.Select(c => data[c.name]))})",
                 "ELSE",
                 $"\tUPDATE {table.qualified_name} SET",
-                $"\t{string.Join(", ", columns.Where(c => c.primary_key == null).Select(c => $"{c.name} = {ConvertObject(data[c.name])}"))} WHERE",
-                $"\t{pKeyColumn} = {ConvertObject(data[pKeyColumn])}\n"
+                $"\t{string.Join(", ", columns.Where(c => c.primary_key == null).Select(c => $"{c.name} = {data[c.name]}"))} WHERE",
+                $"\t{pKeyColumn} = {data[pKeyColumn]}\n"
             });
         }
 
-        public static string SeedIf(SysTable table, IEnumerable<SysColumn> columns, List<Dictionary<string, object>> rows)
+        public static string SeedIf(SysTable table, IEnumerable<SysColumn> columns, RowCollection rows)
         {
             var tableName = table.qualified_name;
             return string.Join("\n", new string[] {
@@ -592,14 +603,14 @@ namespace Migrate
                 //"\tvalues ",
                 //@$"{
                 //    string.Join(",\n", rows.Select(row =>
-                //        "(" + string.Join(", ", columns.Select(c => ConvertObject(row[c.name]))) + ")"
+                //        "(" + string.Join(", ", columns.Select(c => row[c.name])) + ")"
                 //    ))
                 //}",
                 //"\n"
             });
         }
         // made to get around sql 1000 
-        private static string DistributeSeed(string tableName, IEnumerable<SysColumn> columns, List<Dictionary<string, object>> rows)
+        private static string DistributeSeed(string tableName, IEnumerable<SysColumn> columns, RowCollection rows)
         {
             int rounds = rows.Count() / 1000;
             int round = 0;
@@ -612,7 +623,7 @@ namespace Migrate
                     builder.Append($"\tINSERT INTO {tableName} ({string.Join(", ", columns.Select(c => c.name))})\n");
                     builder.Append("\tVALUES \n");
                     builder.Append(string.Join(",\n", set.Select(row =>
-                        "(" + string.Join(", ", columns.Select(c => ConvertObject(row[c.name]))) + ")"
+                        "(" + string.Join(", ", columns.Select(c => row[c.name])) + ")"
                     )));
                     builder.Append("\n");
                 }

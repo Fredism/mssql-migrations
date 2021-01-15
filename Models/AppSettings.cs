@@ -6,6 +6,8 @@ namespace Migrate.Models
 {
     class AppSettings
     {
+        public string Path { get; set; }
+        public bool ToJSON { get; set; }
         public MigrationSettings Model { get; set; }
         public MigrationSettings Data { get; set; }
         public ConnectionStringSettings ConnectionStrings { get; set; }

@@ -1,4 +1,10 @@
-﻿class ConnectionStrings {
+﻿param (
+    [parameter(Position=0)]
+	[string]
+	$path = ".\appsettings.json"
+)
+
+class ConnectionStrings {
 	[string] $Source
 	[string] $Target
 }
@@ -24,7 +30,7 @@ function Execute {
 
 $dbInfo = @{}
 $serializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-$content = $serializer.Deserialize((Get-Content -Path .\appsettings.json), [JsonConfig])
+$content = $serializer.Deserialize((Get-Content -Path $path), [JsonConfig])
 
 $content.AppSettings.ConnectionStrings.Target -split ";" | ForEach-Object {
 	$parts = $_ -split "="
@@ -44,7 +50,7 @@ if(!(Test-Path ".\logs")) {
 echo "Migration started: $((Get-Date).ToString())"
 Execute "patch"
 Execute "create"
+Execute "seed"
 Execute "update"
 Execute "alter"
-Execute "seed"
 echo "Migration finished: $((Get-Date).ToString())"

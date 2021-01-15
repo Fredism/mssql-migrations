@@ -7,7 +7,10 @@ using System.Linq;
 using System.Text;
 using System.IO;
 using System.Data;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ObjectConfiguration = Migrate.Models.AppSettings.MigrationSettings.ObjectConfiguration;
+using System.Text.RegularExpressions;
 
 namespace Migrate
 {
@@ -44,23 +47,28 @@ namespace Migrate
         private string path = Helpers.GetAppRootDir();
         private readonly string sourceConn;
         private readonly string targetConn;
-        private readonly string sourceDb;
-        private readonly string targetDb;
-        private readonly int sourceId;
-        private readonly int targetId;
+        private string sourceDb;
+        private string targetDb;
+        private int sourceId;
+        private int targetId;
 
         private HashSet<string> modelSchemas; // schemas to model objects
         private HashSet<string> dataSchemas; // schemas to copy the data from
-        private Dictionary<string, int> sourceSchemas;
-        private Dictionary<string, int> targetSchemas;
 
         // maps qualified_name to object_id
-        private Dictionary<string, string> sourceObjects;
-        private Dictionary<string, string> targetObjects;
+        private Dictionary<string, string> sourceObjects = new Dictionary<string, string>();
+        private Dictionary<string, string> targetObjects = new Dictionary<string, string>();
 
-        // maps object_id
-        private Dictionary<string, string> sourceTypes;
-        private Dictionary<string, string> targetTypes;
+        // maps object_id to type
+        private Dictionary<string, string> sourceTypes = new Dictionary<string, string>();
+        private Dictionary<string, string> targetTypes = new Dictionary<string, string>();
+
+        // maps object_id to the DateTime of last UPDATE
+        private Dictionary<string, DateTime> sourceUpdates;
+        private Dictionary<string, DateTime> targetUpdates;
+
+        private Dictionary<string, int> sourceSchemas;
+        private Dictionary<string, int> targetSchemas;
         private Dictionary<string, SysTable> sourceTables;
         private Dictionary<string, SysTable> targetTables;
         private Dictionary<string, List<SysColumn>> sourceColumns;
@@ -79,6 +87,8 @@ namespace Migrate
         private Dictionary<string, SysObject> targetFuncs;
         private Dictionary<string, SysObject> sourceViews;
         private Dictionary<string, SysObject> targetViews;
+
+        private DbData dbData = new DbData();
 
         private List<int> dataSchemaIds
         {
@@ -101,22 +111,37 @@ namespace Migrate
                 return targetSchemas.Values.ToList();
             }
         }
+        private bool usingSourceFile
+        {
+            get
+            {
+                return !string.IsNullOrEmpty(settings.Path) && string.IsNullOrEmpty(settings.ConnectionStrings.Source);
+            }
+        }
         // Takes two connection strings
         public Migrator(AppSettings config)
         {
-            if(config?.ConnectionStrings == null || string.IsNullOrEmpty(config.ConnectionStrings.Source))
+            if(config?.ConnectionStrings == null)
             {
                 throw new Exception("connection string not specified");
             }
             settings = config;
             sourceConn = config.ConnectionStrings.Source;
             targetConn = config.ConnectionStrings.Target;
-            sourceDb = Helpers.GetDbName(sourceConn);
+
+            if(usingSourceFile)
+            {
+                path = settings.Path;
+                ReadModel();
+                ReadData();
+            }
+            else
+            {
+                sourceDb = Helpers.GetDbName(sourceConn);
+                sourceId = GetDatabaseId(sourceDb, sourceConn);
+            }
+
             targetDb = Helpers.GetDbName(targetConn);
-            if (sourceDb == null || targetDb == null) throw new Exception("source or target not specified");
-
-
-            sourceId = GetDatabaseId(sourceDb, sourceConn);
             targetId = GetDatabaseId(targetDb, targetConn);
 
             if (sourceId == -1)
@@ -127,11 +152,6 @@ namespace Migrate
             {
                 throw new Exception("target id could not be read");
             }
-
-            sourceObjects = new Dictionary<string, string>();
-            targetObjects = new Dictionary<string, string>();
-            sourceTypes = new Dictionary<string, string>();
-            targetTypes = new Dictionary<string, string>();
         }
 
         public void Migrate()
@@ -139,13 +159,28 @@ namespace Migrate
             Load();
             Patch();
             Create();
+            Seed();
             Update();
             Alter();
-            Seed();
+            Dump();
         }
 
         protected void Load()
         {
+            if(usingSourceFile)
+            {
+                modelSchemas = sourceTables.Values.Select(table => table.schema_name).ToHashSet();
+                dataSchemas = dbData.Seed.Keys // seed is guaranteed to include all data tables
+                    .Select(key => key.Split(".")[0])
+                    .Distinct()
+                    .Select(schema => Regex.Replace(schema, @"\[(\w+)\]", "$1"))
+                    .ToHashSet();
+
+                LoadTargetModels();
+
+                return;
+            }
+
             var allSchemas = Helpers.ExecuteCommand<NameValue>(new SqlCommand("select name from sys.schemas"), sourceConn)
                     .Select(schema => schema.name).ToList();
             dataSchemas = ConfigureSchemas(settings.Data?.Schemas, allSchemas);
@@ -167,6 +202,15 @@ namespace Migrate
             LoadFunctions();
             LoadProcedures();
             LoadViews();
+            MapModels();
+        }
+
+        protected void Dump()
+        {
+            if (!settings.ToJSON) return;
+
+            WriteModel();
+            WriteData();
         }
 
         protected void Create()
@@ -177,13 +221,13 @@ namespace Migrate
             foreach (var schema in sourceSchemas.Keys)
             {
                 builder.Append(Query.CreateSchema(schema));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
             var tables = sourceTables.Values;
             foreach (var table in tables)
             {
                 builder.Append(Query.CreateTable(table, sourceColumns[table.object_id]));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
             foreach (var index in sourceIndexes.Values)
             {
@@ -224,32 +268,32 @@ namespace Migrate
             foreach (var key in primaryKeys)
             {
                 builder.Append(Query.AddPrimaryKey(key));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             foreach (var constraint in defaultConstraints)
             {
                 builder.Append(Query.AddDefaultConstraint(constraint));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             foreach (var constraint in uniqueConstraints)
             {
                 builder.Append(Query.AddUniqueConstraint(constraint));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             foreach (var constraint in checkConstraints)
             {
                 builder.Append(Query.AddCheckConstraint(constraint));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             // foreign keys
             foreach (var key in sourceKeys.Values)
             {
                 builder.Append(Query.AddForeignKey(key));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             // funcs
@@ -295,36 +339,60 @@ namespace Migrate
             foreach (var table in tables)
             {
                 var columns = sourceColumns[table.object_id];
-                var rows = Helpers.ExecuteCommandToDictionary(new SqlCommand($"select * from {table.qualified_name}"), sourceConn);
+                var rows = GetSeedData(table);
 
-                // only perform update on tables w/ primary keys
+                // only seed tables w/ primary keys
                 if (columns.All(c => c.primary_key == null)) continue;
                 // if nothing to seed
-                else if (rows.Count() == 0) continue;
+                else if (rows == null || rows.Count() == 0) continue;
 
-                var hasIdentity = table.has_identity != null;
-                builder.Append($"-- {table.qualified_name} --\n\n");
+                SeedTable(builder, table, columns, rows);
 
-                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "ON"));
-                builder.Append(Query.SeedIf(table, columns, rows));
-                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF"));
-                builder.Append("GO\n\n");
+                if(settings.ToJSON)
+                {
+                    AddData(dbData.Seed, table, rows);
+                }
             }
 
-            builder.Append(Query.ToggleConstraintForEach(true));
+            // if there is an update, this code will run there
+            if(!GetTablesToUpdate().Any())
+            {
+                builder.Append(Query.ToggleConstraintForEach(true));
+            }
 
             File.WriteAllText($"{path}\\seed.sql", builder.ToString());
         }
 
-        protected void Update()
+        private RowCollection GetSeedData(SysTable table)
         {
-            var builder = new StringBuilder();
-            builder.Append($"USE {targetDb};\n\n");
+            if(usingSourceFile)
+            {
+                return dbData.Seed.GetValueOrDefault(table.qualified_name);
+            }
+            var rows = Helpers.ExecuteCommandToDictionary(new SqlCommand($"select * from {table.qualified_name}"), sourceConn);
+            return Query.ConvertRows(rows);
+        }
+
+        private RowCollection GetUpdateData(SysTable table)
+        {
+            if (usingSourceFile)
+            {
+                return dbData.Update.GetValueOrDefault(table.qualified_name);
+            }
+            var rows = Helpers.ExecuteCommandToDictionary(new SqlCommand($"select * from {table.qualified_name}"), sourceConn);
+            return Query.ConvertRows(rows);
+        }
+
+        private List<SysTable> GetTablesToUpdate()
+        {
+            if(usingSourceFile)
+            {
+                return dbData.Update.Keys.Select(name => sourceTables[sourceObjects[name]]).ToList();
+            }
 
             var toUpdate = new List<SysTable>();
-            var updateCmd = new SqlCommand(Query.GetLastUpdate());
-            var sourceUpdates = Helpers.ExecuteCommand<DateValue>(updateCmd, sourceConn).ToDictionary(u => u.id, u => u.date);
-            var targetUpdates = Helpers.ExecuteCommand<DateValue>(updateCmd, targetConn).ToDictionary(u => u.id, u => u.date);
+            if(sourceUpdates == null) sourceUpdates = GetLastTableUpdates(sourceConn);
+            if(targetUpdates == null) targetUpdates = GetLastTableUpdates(targetConn);
 
             var tables = sourceTables.Values.Where(table => dataSchemas.Contains(table.schema_name));
             foreach (var table in tables)
@@ -347,42 +415,48 @@ namespace Migrate
                 }
             }
 
-            if (toUpdate.Count() > 0)
+            return toUpdate;
+        }
+
+        protected void Update()
+        {
+            var builder = new StringBuilder();
+            builder.Append($"USE {targetDb};\n\n");
+
+            var toUpdate = GetTablesToUpdate();
+
+            if (toUpdate.Any())
             {
                 builder.Append(Query.ToggleIdInsertForEach("OFF"));
                 builder.Append(Query.ToggleConstraintForEach(false));
                 builder.Append(Query.SetNoCount("ON"));
                 builder.Append($"\n{Query.BatchSeperator}");
             }
-            else
-            {
-                builder.Append("-- Nothing to update. --");
-            }
 
             foreach (var table in toUpdate)
             {
                 var columns = sourceColumns[table.object_id];
-                var rows = Helpers.ExecuteCommandToDictionary(new SqlCommand($"select * from {table.qualified_name}"), sourceConn);
+                var rows = GetUpdateData(table);
 
                 // only perform update on tables w/ primary keys
                 if (columns.All(c => c.primary_key == null)) continue;
-                else if (rows.Count() == 0) continue;
+                else if (rows == null || rows.Count() == 0) continue;
 
-                var hasIdentity = table.has_identity != null;
-                builder.Append($"-- {table.qualified_name} --\n\n");
+                UpdateTable(builder, table, columns, rows);
 
-                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "ON"));
-                rows.ForEach(row =>
+                if (settings.ToJSON)
                 {
-                    builder.Append(Query.UpdateIf(table, columns, row));
-                    builder.Append(Query.BatchSeperator);
-                });
-                if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF") + "\n");
-            };
+                    AddData(dbData.Update, table, rows);
+                }
+            }
 
-            if (toUpdate.Count() > 0)
+            if (toUpdate.Any())
             {
                 builder.Append("\n" + Query.ToggleConstraintForEach(true));
+            }
+            else
+            {
+                builder.Append("-- Nothing to update. --");
             }
 
             File.WriteAllText($"{path}\\update.sql", builder.ToString());
@@ -400,7 +474,7 @@ namespace Migrate
             foreach (var key in toDrop)
             {
                 builder.Append(Query.DropForeignKey(key));
-                builder.Append("GO\n\n");
+                builder.Append(Query.BatchSeperator);
             }
 
             PatchColumns(builder);
@@ -418,14 +492,11 @@ namespace Migrate
         {
             var source = sourceObjects.Keys.ToHashSet();
             var target = targetObjects.Keys.ToHashSet();
-            var intersect = source.Intersect(target);
+            var intersect = source.Intersect(target).Where(name => sourceTypes[sourceObjects[name]] == Enumerations.GetDescription(SQLTypes.UserTable));
 
             foreach (var tableName in intersect)
             {
                 var sourceId = sourceObjects[tableName];
-                if (sourceTypes[sourceId] != Enumerations.GetDescription(SQLTypes.UserTable))
-                    continue;
-
                 var targetId = targetObjects[tableName];
 
                 var sourceCols = sourceColumns[sourceId];
@@ -453,23 +524,23 @@ namespace Migrate
                     toDrop.ForEach(column =>
                     {
                         builder.Append(Query.DropColumn(column));
-                        builder.Append("GO\n\n");
+                        builder.Append(Query.BatchSeperator);
                     });
                     toAdd.ForEach(column =>
                     {
                         if (column.isNullable)
                         {
                             builder.Append(Query.AddColumn(column));
-                            builder.Append("GO\n\n");
+                            builder.Append(Query.BatchSeperator);
                         }
                         else
                         {
                             var nullable = SysColumn.DeepClone(column);
                             nullable.is_nullable = "true";
                             builder.Append(Query.AddColumn(nullable));
-                            builder.Append("GO\n\n");
+                            builder.Append(Query.BatchSeperator);
                             builder.Append(Query.UpdateIfNull(column));
-                            builder.Append("GO\n\n");
+                            builder.Append(Query.BatchSeperator);
                             toAlter.Add(column);
                         }
                     });
@@ -477,13 +548,54 @@ namespace Migrate
                     {
                         if(DependsOn(primaryKey, column)) {
                             builder.Append(Query.DropPrimaryKey(primaryKey));
-                            builder.Append("GO\n\n");
+                            builder.Append(Query.BatchSeperator);
                         }
                         builder.Append(Query.AlterColumn(column));
-                        builder.Append("GO\n\n");
+                        builder.Append(Query.BatchSeperator);
                     });
                 }
             }
+        }
+
+        private Dictionary<string, DateTime> GetLastTableUpdates(string conn)
+        {
+            var cmd = new SqlCommand(Query.GetLastUpdate());
+            return Helpers.ExecuteCommand<DateValue>(cmd, conn).ToDictionary(u => u.id, u => u.date);
+        }
+
+        private void AddData(DataDictionary dict, SysTable table, RowCollection rows)
+        {
+            if (!dict.ContainsKey(table.qualified_name))
+            {
+                dict.Add(table.qualified_name, rows);
+            }
+        }
+
+        private void UpdateTable(StringBuilder builder, SysTable table, List<SysColumn> columns, RowCollection rows)
+        {
+            var hasIdentity = table.has_identity != null;
+            builder.Append($"-- {table.qualified_name} --\n\n");
+
+            if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "ON"));
+
+            foreach(var row in rows)
+            {
+                builder.Append(Query.UpdateIf(table, columns, row));
+                builder.Append(Query.BatchSeperator);
+            }
+
+            if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF") + "\n");
+        }
+
+        private void SeedTable(StringBuilder builder, SysTable table, List<SysColumn> columns, RowCollection rows)
+        {
+            var hasIdentity = table.has_identity != null;
+
+            builder.Append($"-- {table.qualified_name} --\n\n");
+            if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "ON"));
+            builder.Append(Query.SeedIf(table, columns, rows));
+            if (hasIdentity) builder.Append(Query.ToggleIdInsert(table.qualified_name, "OFF"));
+            builder.Append(Query.BatchSeperator);
         }
 
         private bool DependsOn(SysConstraint constraint, SysColumn column)
@@ -507,6 +619,27 @@ namespace Migrate
             return (int)record["database_id"];
         }
 
+        private HashSet<string> ConfigureSchemas(ObjectConfiguration configuration, List<string> allSchemas)
+        {
+            if (configuration == null)
+            {
+                return new HashSet<string>();
+            }
+            else
+            {
+                var schemas = new List<string>();
+                if (configuration.Include != null)
+                {
+                    schemas.AddRange(configuration.Include);
+                }
+                else if (configuration.Exclude != null)
+                {
+                    schemas.AddRange(allSchemas.Except(configuration.Exclude));
+                }
+                return schemas.ToHashSet();
+            }
+        }
+
         private void LoadSchemas(IEnumerable<string> schemas)
         {
             var cmd = new SqlCommand($"select schema_id[id], name from sys.schemas where name in ({string.Join(", ", schemas.Select(schema => $"'{schema}'"))})");
@@ -520,17 +653,6 @@ namespace Migrate
             var targetCmd = new SqlCommand(Query.GetTables(targetSchemaIds));
             sourceTables = Helpers.ExecuteCommand<SysTable>(sourceCmd, sourceConn).ToDictionary(t => t.object_id);
             targetTables = Helpers.ExecuteCommand<SysTable>(targetCmd, targetConn).ToDictionary(t => t.object_id);
-
-            foreach (var table in sourceTables.Values)
-            {
-                sourceObjects[table.qualified_name] = table.object_id;
-                sourceTypes[table.object_id] = Enumerations.GetDescription(SQLTypes.UserTable);
-            }
-            foreach (var table in targetTables.Values)
-            {
-                targetObjects[table.qualified_name] = table.object_id;
-                targetTypes[table.object_id] = Enumerations.GetDescription(SQLTypes.UserTable);
-            }
         }
 
         private void LoadColumns()
@@ -548,20 +670,8 @@ namespace Migrate
         {
             var sourceCmd = new SqlCommand(Query.GetForeignKeys(sourceSchemaIds));
             var targetCmd = new SqlCommand(Query.GetForeignKeys(targetSchemaIds));
-
             sourceKeys = Helpers.ExecuteCommand<SysForeignKey>(sourceCmd, sourceConn).ToDictionary(k => k.constraint_id);
             targetKeys = Helpers.ExecuteCommand<SysForeignKey>(targetCmd, targetConn).ToDictionary(k => k.constraint_id);
-
-            foreach (var key in sourceKeys.Values)
-            {
-                sourceObjects[key.qualified_name] = key.constraint_id;
-                sourceTypes[key.constraint_id] = Enumerations.GetDescription(SQLTypes.ForeignKey);
-            }
-            foreach (var key in targetKeys.Values)
-            {
-                targetObjects[key.qualified_name] = key.constraint_id;
-                targetTypes[key.constraint_id] = Enumerations.GetDescription(SQLTypes.ForeignKey);
-            }
         }
 
         private void LoadIndexes()
@@ -594,17 +704,14 @@ namespace Migrate
             var targetCmd = new SqlCommand(Query.GetFunctions(targetSchemaIds));
             sourceFuncs = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
             targetFuncs = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
-            MapSourceObjects(sourceFuncs.Values);
-            MapTargetObjects(targetFuncs.Values);
         }
 
         private void LoadProcedures()
         {
-            var cmd = new SqlCommand(Query.GetStoredProcedures());
-            sourceProcs = Helpers.ExecuteCommand<SysObject>(cmd, sourceConn).ToDictionary(p => p.object_id);
-            targetProcs = Helpers.ExecuteCommand<SysObject>(cmd, targetConn).ToDictionary(p => p.object_id);
-            MapSourceObjects(sourceProcs.Values);
-            MapTargetObjects(targetProcs.Values);
+            var sourceCmd = new SqlCommand(Query.GetStoredProcedures(sourceSchemaIds));
+            var targetCmd = new SqlCommand(Query.GetStoredProcedures(targetSchemaIds));
+            sourceProcs = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
+            targetProcs = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
         }
 
         private void LoadViews()
@@ -613,28 +720,76 @@ namespace Migrate
             var targetCmd = new SqlCommand(Query.GetViews(targetSchemaIds));
             sourceViews = Helpers.ExecuteCommand<SysObject>(sourceCmd, sourceConn).ToDictionary(p => p.object_id);
             targetViews = Helpers.ExecuteCommand<SysObject>(targetCmd, targetConn).ToDictionary(p => p.object_id);
+        }
+
+        private void LoadTargetModels()
+        {
+            SqlCommand schemaCmd = new SqlCommand(@$"select schema_id[id], name from sys.schemas where name in ({
+                string.Join(", ", sourceSchemas.Keys.Select(schema => $"'{schema}'"))
+            })");
+            targetSchemas = Helpers.ExecuteCommand<IdValue>(schemaCmd, targetConn).ToDictionary(s => s.name, s => s.id);
+
+            SqlCommand tableCmd = new SqlCommand(Query.GetTables(targetSchemaIds));
+            SqlCommand columnCmd = new SqlCommand(Query.GetColumns(targetSchemaIds));
+            SqlCommand keyCmd = new SqlCommand(Query.GetForeignKeys(targetSchemaIds));
+            SqlCommand constraintCmd = new SqlCommand(Query.GetConstraints(targetSchemaIds));
+            SqlCommand indexCmd = new SqlCommand(Query.GetIndexes(targetSchemaIds));
+            SqlCommand tableTypeCmd = new SqlCommand(Query.GetTableTypes(targetSchemaIds));
+            SqlCommand fnCmd = new SqlCommand(Query.GetFunctions(targetSchemaIds));
+            SqlCommand spCmd = new SqlCommand(Query.GetStoredProcedures(targetSchemaIds));
+            SqlCommand vwCmd = new SqlCommand(Query.GetViews(targetSchemaIds));
+            targetTables = Helpers.ExecuteCommand<SysTable>(tableCmd, targetConn).ToDictionary(t => t.object_id);
+            var allTargetColumns = Helpers.ExecuteCommand<SysColumn>(columnCmd, targetConn);
+            targetColumns = allTargetColumns.GroupBy(c => c.object_id).ToDictionary(c => c.Key, c => c.ToList());
+            targetKeys = Helpers.ExecuteCommand<SysForeignKey>(keyCmd, targetConn).ToDictionary(k => k.constraint_id);
+            targetConstraints = Helpers.ExecuteCommand<SysConstraint>(constraintCmd, targetConn).ToDictionary(p => p.object_id);
+            targetIndexes = Helpers.ExecuteCommand<SysIndex>(indexCmd, targetConn).ToDictionary(p => p.object_id + p.index_id);
+            targetTableTypes = Helpers.ExecuteCommand<SysTableType>(tableTypeCmd, targetConn).ToDictionary(p => p.object_id);
+            targetFuncs = Helpers.ExecuteCommand<SysObject>(fnCmd, targetConn).ToDictionary(p => p.object_id);
+            targetProcs = Helpers.ExecuteCommand<SysObject>(spCmd, targetConn).ToDictionary(p => p.object_id);
+            targetViews = Helpers.ExecuteCommand<SysObject>(vwCmd, targetConn).ToDictionary(p => p.object_id);
+            MapTargetModels();
+        }
+
+        private void MapModels()
+        {
+            MapSourceModels();
+            MapTargetModels();
+        }
+
+        private void MapSourceModels()
+        {
+            MapTables(sourceTables.Values, sourceObjects, sourceTypes);
+            MapForeignKeys(sourceKeys.Values, sourceObjects, sourceTypes);
+            MapSourceObjects(sourceFuncs.Values);
+            MapSourceObjects(sourceProcs.Values);
             MapSourceObjects(sourceViews.Values);
+        }
+
+        private void MapTargetModels()
+        {
+            MapTables(targetTables.Values, targetObjects, targetTypes);
+            MapForeignKeys(targetKeys.Values, targetObjects, targetTypes);
+            MapTargetObjects(targetFuncs.Values);
+            MapTargetObjects(targetProcs.Values);
             MapTargetObjects(targetViews.Values);
         }
 
-        private HashSet<string> ConfigureSchemas(ObjectConfiguration configuration, List<string> allSchemas)
+        private void MapTables(IEnumerable<SysTable> tables, Dictionary<string, string> objectDict, Dictionary<string, string> typeDict)
         {
-            if (configuration == null)
+            foreach (var @object in tables)
             {
-                return new HashSet<string>();
+                objectDict[@object.qualified_name] = @object.object_id;
+                typeDict[@object.object_id] = Enumerations.GetDescription(SQLTypes.UserTable);
             }
-            else
+        }
+
+        private void MapForeignKeys(IEnumerable<SysForeignKey> keys, Dictionary<string, string> objectDict, Dictionary<string, string> typeDict)
+        {
+            foreach (var @object in keys)
             {
-                var schemas = new List<string>();
-                if (configuration.Include != null)
-                {
-                    schemas.AddRange(configuration.Include);
-                }
-                else if (configuration.Exclude != null)
-                {
-                    schemas.AddRange(allSchemas.Except(configuration.Exclude));
-                }
-                return schemas.ToHashSet();
+                objectDict[@object.qualified_name] = @object.constraint_id;
+                typeDict[@object.constraint_id] = Enumerations.GetDescription(SQLTypes.ForeignKey);
             }
         }
 
@@ -668,6 +823,67 @@ namespace Migrate
                 var targetObject = targetSet[@object.qualified_name];
                 return targetObject.modify_date.HasValue && @object.modify_date > targetObject.modify_date;
             }
+        }
+
+        private void ReadModel(string pathToFile = null)
+        {
+            pathToFile ??= $"{path}\\model.json";
+            var json = File.ReadAllText(pathToFile);
+            DbModel dbModel = JsonSerializer.Deserialize<DbModel>(json);
+            sourceDb = dbModel.Database.Name;
+            sourceId = dbModel.Database.Id;
+            sourceSchemas = (Dictionary<string, int>)dbModel.Schemas;
+            sourceTables = (Dictionary<string, SysTable>)dbModel.Tables;
+            sourceColumns = (Dictionary<string, List<SysColumn>>)dbModel.Columns;
+            sourceKeys = (Dictionary<string, SysForeignKey>)dbModel.ForeignKeys;
+            sourceConstraints = (Dictionary<string, SysConstraint>)dbModel.Constraints;
+            sourceIndexes = (Dictionary<string, SysIndex>)dbModel.Indexes;
+            sourceTableTypes = (Dictionary<string, SysTableType>)dbModel.TableTypes;
+            sourceProcs = (Dictionary<string, SysObject>)dbModel.Procedures;
+            sourceFuncs = (Dictionary<string, SysObject>)dbModel.Functions;
+            sourceViews = (Dictionary<string, SysObject>)dbModel.Views;
+            MapSourceModels();
+        }
+
+        private void ReadData(string pathToFile = null)
+        {
+            pathToFile ??= $"{path}\\data.json";
+            var json = File.ReadAllText(pathToFile);
+            dbData = JsonSerializer.Deserialize<DbData>(json);
+        }
+
+        private void WriteModel()
+        {
+            DbModel dbModel = new DbModel();
+            dbModel.Schemas = sourceSchemas;
+            dbModel.Tables = sourceTables;
+            dbModel.Columns = sourceColumns;
+            dbModel.ForeignKeys = sourceKeys;
+            dbModel.Constraints = sourceConstraints;
+            dbModel.Indexes = sourceIndexes;
+            dbModel.TableTypes = sourceTableTypes;
+            dbModel.Procedures = sourceProcs;
+            dbModel.Functions = sourceFuncs;
+            dbModel.Views = sourceViews;
+            dbModel.Database = new DbModel.DbInfo()
+            {
+                Name = sourceDb,
+                Id = sourceId
+            };
+            var json = JsonSerializer.Serialize(dbModel, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+            });
+            File.WriteAllText($"{path}\\model.json", json);
+        }
+
+        private void WriteData()
+        {
+            var json = JsonSerializer.Serialize(dbData, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+            });
+            File.WriteAllText($"{path}\\data.json", json);
         }
     }
 }
