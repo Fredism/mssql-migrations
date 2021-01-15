@@ -139,9 +139,9 @@ namespace Migrate
             Load();
             Patch();
             Create();
+            Update();
             Alter();
             Seed();
-            Update();
         }
 
         protected void Load()
