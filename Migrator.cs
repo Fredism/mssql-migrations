@@ -43,7 +43,7 @@ namespace Migrate
     class Migrator
     {
         private AppSettings settings;
-        private string path = Helpers.GetAppRootDir();
+        private readonly string path;
         private readonly string sourceConn;
         private readonly string targetConn;
         private string sourceDb;
@@ -150,9 +150,14 @@ namespace Migrate
             sourceConn = config.ConnectionStrings.Source;
             targetConn = config.ConnectionStrings.Target;
 
-            if(usingSourceFile)
+            if (string.IsNullOrEmpty(settings.Path))
             {
-                path = settings.Path;
+                settings.Path = Helpers.GetAppRootDir();
+            }
+            path = settings.Path;
+
+            if (usingSourceFile)
+            {
                 ReadModel();
                 ReadData();
             }
