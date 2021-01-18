@@ -497,11 +497,32 @@ namespace Migrate
             builder.Append(opening);
 
             // drop foreign keys not in source
-            var excluded = targetKeys.Values.Select(k => k.qualified_name).Except(sourceKeys.Values.Select(k => k.qualified_name));
-            var toDrop = targetKeys.Values.Where(k => excluded.Contains(k.qualified_name));
-            foreach (var key in toDrop)
+            var excludedKeys = targetKeys.Values
+                .Select(k => k.qualified_name)
+                .Except(sourceKeys.Values.Select(k => k.qualified_name));
+
+            var keysToDrop = targetKeys.Values.Where(k => excludedKeys.Contains(k.qualified_name));
+            foreach (var key in keysToDrop)
             {
                 builder.Append(Query.DropForeignKey(key));
+                builder.Append(Query.BatchSeperator);
+            }
+
+            var excludedTables = targetTables.Values
+                .Select(k => k.qualified_name)
+                .Except(sourceTables.Values.Select(k => k.qualified_name));
+
+            var tablesToDrop = targetTables.Values.Where(k => excludedTables.Contains(k.qualified_name));
+            foreach (var table in tablesToDrop)
+            {
+                builder.Append(Query.DropTable(table));
+                builder.Append(Query.BatchSeperator);
+            }
+
+            var schemasToDrop = targetSchemas.Keys.Except(sourceSchemas.Keys);
+            foreach(var schema in schemasToDrop)
+            {
+                builder.Append(Query.DropSchema(schema));
                 builder.Append(Query.BatchSeperator);
             }
 

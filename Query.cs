@@ -126,7 +126,15 @@ namespace Migrate
             return string.Join("\n", new string[]
             {
                 $"IF EXISTS (SELECT schema_id FROM sys.schemas WHERE name = '{schema}')",
-                $"DROP SCHEMA {schema}\n",
+                $"\tDROP SCHEMA {schema}\n",
+            });
+        }
+        public static string DropTable(SysTable table)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"IF EXISTS (SELECT object_id FROM sys.tables WHERE object_id = OBJECT_ID('{table.qualified_name}'))",
+                $"\tDROP TABLE {table.qualified_name}\n",
             });
         }
 
