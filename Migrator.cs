@@ -8,7 +8,6 @@ using System.Text;
 using System.IO;
 using System.Data;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using ObjectConfiguration = Migrate.Models.AppSettings.MigrationSettings.ObjectConfiguration;
 using System.Text.RegularExpressions;
 
@@ -116,6 +115,28 @@ namespace Migrate
             get
             {
                 return !string.IsNullOrEmpty(settings.Path) && string.IsNullOrEmpty(settings.ConnectionStrings.Source);
+            }
+        }
+        private List<string> dataTableIncludes
+        {
+            get { return settings.Data?.Tables?.Include ?? new List<string>(); }
+        }
+        private List<string> dataTableExcludes
+        {
+            get { return settings.Data?.Tables?.Exclude ?? new List<string>(); }
+        }
+        // list of tables whose data is to be synce
+        private List<SysTable> dataTables
+        {
+            get
+            {
+                var qualifiedIncludes = QualifyNames(dataTableIncludes);
+                var qualifiedExcludes = QualifyNames(dataTableExcludes);
+
+                return sourceTables.Values
+                    .Where(table => !qualifiedExcludes.Contains(table.qualified_name) &&
+                        (dataSchemas.Contains(table.schema_name) || qualifiedIncludes.Contains(table.qualified_name)))
+                    .ToList();
             }
         }
         // Takes two connection strings
@@ -299,27 +320,19 @@ namespace Migrate
             // funcs
             foreach (var func in sourceFuncs.Values)
             {
-                if (!ObjectChanged(func, targetFuncs)) {
-                    continue;
-                }
+                //if (!ObjectChanged(func, targetFuncs)) continue;
                 builder.Append(Query.AlterFunc(func));
             }
             // views
             foreach (var view in sourceViews.Values)
             {
-                if (!ObjectChanged(view, targetViews))
-                {
-                    continue;
-                }
+                //if (!ObjectChanged(view, targetViews)) continue;
                 builder.Append(Query.AlterView(view));
             }
             // procs
             foreach (var proc in sourceProcs.Values)
             {
-                if (!ObjectChanged(proc, targetProcs))
-                {
-                    continue;
-                }
+                //if (!ObjectChanged(proc, targetProcs)) continue;
                 builder.Append(Query.AlterProc(proc));
             }
 
@@ -330,12 +343,11 @@ namespace Migrate
         {
             var builder = new StringBuilder();
             builder.Append($"USE {targetDb};\n\n");
-
             builder.Append(Query.ToggleIdInsertForEach("OFF"));
-
             builder.Append(Query.ToggleConstraintForEach(false) + "\n\n");
 
-            var tables = sourceTables.Values.Where(table => dataSchemas.Contains(table.schema_name));
+            var tables = dataTables;
+
             foreach (var table in tables)
             {
                 var columns = sourceColumns[table.object_id];
@@ -361,6 +373,17 @@ namespace Migrate
             }
 
             File.WriteAllText($"{path}\\seed.sql", builder.ToString());
+        }
+
+        private List<string> QualifyNames(List<string> collection)
+        {
+            return collection.Select(name =>
+            {
+                var parts = name.Split(".");
+                var schema = parts[0];
+                var table = parts[1];
+                return $"[{schema}].[{table}]";
+            }).ToList();
         }
 
         private RowCollection GetSeedData(SysTable table)
@@ -394,7 +417,7 @@ namespace Migrate
             if(sourceUpdates == null) sourceUpdates = GetLastTableUpdates(sourceConn);
             if(targetUpdates == null) targetUpdates = GetLastTableUpdates(targetConn);
 
-            var tables = sourceTables.Values.Where(table => dataSchemas.Contains(table.schema_name));
+            var tables = dataTables;
             foreach (var table in tables)
             {
                 if (!sourceUpdates.ContainsKey(table.object_id)) continue; // ignore this table
@@ -649,7 +672,7 @@ namespace Migrate
 
         private void LoadTables()
         {
-            var sourceCmd = new SqlCommand(Query.GetTables(sourceSchemaIds));
+            var sourceCmd = new SqlCommand(Query.GetTables(sourceSchemaIds, settings.Data?.Tables?.Include));
             var targetCmd = new SqlCommand(Query.GetTables(targetSchemaIds));
             sourceTables = Helpers.ExecuteCommand<SysTable>(sourceCmd, sourceConn).ToDictionary(t => t.object_id);
             targetTables = Helpers.ExecuteCommand<SysTable>(targetCmd, targetConn).ToDictionary(t => t.object_id);

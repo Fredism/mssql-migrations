@@ -15,6 +15,7 @@ namespace Migrate.Models
         public class MigrationSettings
         {
             public ObjectConfiguration Schemas { get; set; } // specify exact schema names
+            public ObjectConfiguration Tables { get; set; } // specify exact table names
 
             public class ObjectConfiguration
             {

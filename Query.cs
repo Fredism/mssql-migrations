@@ -255,8 +255,49 @@ namespace Migrate
         }
 
         // select
-        public static string GetTables(IEnumerable<int> schemas = null)
+        private static string TablePredicate(IEnumerable<string> tables)
         {
+            var conditions = tables.Select(name =>
+            {
+                var parts = name.Split(".");
+                var schema = parts[0];
+                var table = parts[1];
+
+                return $" (schema_name(t.schema_id) = '{schema}' and t.name = '{table}') ";
+            });
+            return string.Join("or \n", conditions);
+        }
+        public static string GetTables(IEnumerable<int> schemas = null, IEnumerable<string> includes = null, IEnumerable<string> excludes = null)
+        {
+            var schemaPredicate = FilterSchemas(schemas);
+            var predicate = schemaPredicate;
+            if (includes != null)
+            {
+                var inCondition = TablePredicate(includes);
+
+                if (string.IsNullOrEmpty(predicate))
+                {
+                    predicate = $"and ({inCondition})";
+                }
+                else
+                {
+                    predicate = $"and (({inCondition}) or ({schemaPredicate.Replace("and ", "")}))";
+                }
+            }
+
+            if (excludes != null)
+            {
+                var exCondition = TablePredicate(excludes);
+
+                if (string.IsNullOrEmpty(predicate))
+                {
+                    predicate = $"and not ({exCondition})";
+                }
+                else
+                {
+                    predicate += $" and not ({exCondition})";
+                }
+            }
             return $@"
                 select 
                     t.name,
@@ -268,7 +309,7 @@ namespace Migrate
                     history_table = object_name(t.history_table_id)
                     from sys.tables t
                     where t.temporal_type <> 1
-                    {FilterSchemas(schemas)}
+                    {predicate ?? ""}
                     order by t.create_date
             ";
         }
@@ -519,7 +560,8 @@ namespace Migrate
                     from sys.sysindexes i
                     join sys.objects o on i.id = o.object_id
                     join sys.dm_db_index_usage_stats us on us.object_id = o.object_id and us.database_id = db_id(db_name())
-                    where o.type = 'U' and stats_date(id, indid) is not null
+                    where o.type = 'U' and 
+                        (stats_date(id, indid) is not null or us.last_user_update is not null)
                     group by o.object_id
             ";
         }
@@ -598,15 +640,9 @@ namespace Migrate
             var tableName = table.qualified_name;
             return string.Join("\n", new string[] {
                 $"IF NOT EXISTS (SELECT * FROM {tableName})",
-                DistributeSeed(tableName, columns, rows)
-                //$"\tinsert into {tableName} ({string.Join(", ", columns.Select(c => c.name))})",
-                //"\tvalues ",
-                //@$"{
-                //    string.Join(",\n", rows.Select(row =>
-                //        "(" + string.Join(", ", columns.Select(c => row[c.name])) + ")"
-                //    ))
-                //}",
-                //"\n"
+                "BEGIN",
+                DistributeSeed(tableName, columns, rows),
+                "END\n"
             });
         }
         // made to get around sql 1000 
@@ -625,7 +661,7 @@ namespace Migrate
                     builder.Append(string.Join(",\n", set.Select(row =>
                         "(" + string.Join(", ", columns.Select(c => row[c.name])) + ")"
                     )));
-                    builder.Append("\n");
+                    if(round != rounds) builder.Append("\n");
                 }
                 round++;
             }
