@@ -10,7 +10,7 @@ namespace Migrate
 {
     class Query
     {
-        public static readonly string BatchSeperator = "GO\n\n";
+        public static readonly string BatchSeperator = $"GO\n\n";
         // create
         public static string CreateSchema(string schema)
         {
@@ -82,7 +82,7 @@ namespace Migrate
             {
                 $"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = '{index.name}' and object_id = OBJECT_ID('{index.qualified_table_name}'))",
                 $"CREATE {index.type_desc} INDEX [{index.name}] ON {index.qualified_table_name} {index.columns}",
-                (index.include == null? "": $"INCLUDE {index.include}\n") + "GO\n\n"
+                (index.include == null? "": $"INCLUDE {index.include}\n") + BatchSeperator
             });
         }
         public static string CreateTableType(SysTableType tt)
@@ -92,7 +92,7 @@ namespace Migrate
                 $"IF (TYPE_ID('{tt.qualified_name}') IS NULL)",
                 $"CREATE TYPE {tt.qualified_name} AS TABLE(",
                 string.Join(",\n", tt.columns.Split(", ").Select(c => "\t" + c)),
-                ")\nGO\n\n"
+                $")\n{BatchSeperator}"
             });
         }
         public static string CreateFunction(SysObject func)
@@ -112,11 +112,11 @@ namespace Migrate
             return string.Join("\n", new string[] {
                 $"IF (OBJECT_ID('{@object.qualified_name}') IS NOT NULL)",
                 "\tSET NOEXEC ON",
-                "GO",
+                "GO\n",
                 @object.object_definition,
-                "GO",
+                "GO\n",
                 "SET NOEXEC OFF",
-                "GO\n\n"
+                BatchSeperator
             });
         }
 
@@ -257,9 +257,19 @@ namespace Migrate
             var pattern = $@"CREATE(\s+\w+\s+(?:\[?{@object.schema_name}\]?)?\.?\[?{@object.name}\]?)";
             var definition = Regex.Replace(@object.object_definition, pattern, "ALTER$1", RegexOptions.IgnoreCase);
             return string.Join("\n", new string[] {
+                $"IF EXISTS (SELECT object_id FROM sys.objects WHERE object_id = OBJECT_ID('{@object.qualified_name}')"
+                    + $" AND modify_date {(!@object.modify_date.HasValue? "IS NULL": $"> {DateTimeFromParts(@object.modify_date.Value)}")})",
+                "\tSET NOEXEC ON",
+                "GO\n",
                 definition,
-                "GO\n\n",
+                "GO\n",
+                "SET NOEXEC OFF",
+                BatchSeperator
             });
+        }
+        private static string DateTimeFromParts(DateTime dt)
+        {
+            return $"DATETIMEFROMPARTS({dt.Year}, {dt.Month}, {dt.Day}, {dt.Hour}, {dt.Minute}, {dt.Second}, {dt.Millisecond})";
         }
 
         // select
