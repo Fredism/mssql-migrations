@@ -19,7 +19,7 @@ class JsonConfig {
 
 function Execute {
 	param([string] $cmd)
-	sqlcmd -S $server -U $user -P $password -b -i ".\$cmd.sql" -o ".\logs\$cmd.log"
+	sqlcmd -I -S $server -U $user -P $password -b -i ".\$cmd.sql" -o ".\logs\$cmd.log"
 	if ($LASTEXITCODE -ne 0) {
 		echo "$cmd error!"
 	}
@@ -29,6 +29,8 @@ function Execute {
 }
 
 $dbInfo = @{}
+
+Add-Type -AssemblyName System.Web.Extensions
 $serializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
 $content = $serializer.Deserialize((Get-Content -Path $path), [JsonConfig])
 
