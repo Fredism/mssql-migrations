@@ -716,6 +716,8 @@ namespace Migrate
                     return b ? "1" : "0";
                 case int i:
                     return i.ToString();
+                case long l:
+                    return l.ToString();
                 case decimal d:
                     return d.ToString();
                 case char c:
@@ -723,7 +725,7 @@ namespace Migrate
                 case string s:
                     return $"'{s.Replace("'", "''")}'";
                 case DateTime dt:
-                    return $"CAST(N'{dt:yyyy-MM-dd HH:MM:ss.fff}' AS DATETIME)";
+                    return $"CAST(N'{dt:yyyy-MM-dd HH:mm:ss.fff}' AS DATETIME)";
                 default:
                     return "NULL";
             }
