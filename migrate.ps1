@@ -19,7 +19,7 @@ class JsonConfig {
 
 function Execute {
 	param([string] $cmd)
-	sqlcmd -I -S $server -U $user -P $password -b -i ".\$cmd.sql" -o ".\logs\$cmd.log"
+	sqlcmd -I -S $server -U $user -P $password -b -i ".\$cmd.sql" -o ".\logs\$cmd.log" -f 65001
 	if ($LASTEXITCODE -ne 0) {
 		echo "$cmd error!"
 	}
