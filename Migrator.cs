@@ -411,14 +411,14 @@ namespace Migrate
             return Query.ConvertRows(rows);
         }
 
-        private List<SysTable> GetTablesToUpdate()
+        private Dictionary<SysTable, RowCollection> GetTablesToUpdate()
         {
-            if(usingSourceFile)
+            if(usingSourceFile || dbData.Update.Any())
             {
-                return dbData.Update.Keys.Select(name => sourceTables[sourceObjects[name]]).ToList();
+                return dbData.Update.ToDictionary(pair => sourceTables[sourceObjects[pair.Key]], pair => pair.Value);
             }
 
-            var toUpdate = new List<SysTable>();
+            var toUpdate = new Dictionary<SysTable, RowCollection>();
             if(sourceUpdates == null) sourceUpdates = GetLastTableUpdates(sourceConn);
             if(targetUpdates == null) targetUpdates = GetLastTableUpdates(targetConn);
 
@@ -439,7 +439,15 @@ namespace Migrate
 
                 if (targetUpdate <= sourceUpdate)
                 {
-                    toUpdate.Add(table);
+                    var columns = sourceColumns[table.object_id];
+                    var rows = GetUpdateData(table);
+
+                    // only perform update on tables w/ primary keys
+                    if (columns.All(c => c.primary_key == null)) continue;
+                    else if (rows == null || rows.Count() == 0) continue;
+
+                    toUpdate.Add(table, rows);
+                    AddData(dbData.Update, table, rows);
                 }
             }
 
@@ -461,21 +469,13 @@ namespace Migrate
                 builder.Append($"\n{Query.BatchSeperator}");
             }
 
-            foreach (var table in toUpdate)
+            foreach (var pair in toUpdate)
             {
+                var table = pair.Key;
                 var columns = sourceColumns[table.object_id];
-                var rows = GetUpdateData(table);
-
-                // only perform update on tables w/ primary keys
-                if (columns.All(c => c.primary_key == null)) continue;
-                else if (rows == null || rows.Count() == 0) continue;
+                var rows = pair.Value;
 
                 UpdateTable(builder, table, columns, rows);
-
-                if (settings.ToJSON)
-                {
-                    AddData(dbData.Update, table, rows);
-                }
             }
 
             if (toUpdate.Any())
