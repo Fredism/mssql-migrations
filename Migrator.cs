@@ -276,7 +276,7 @@ namespace Migrate
                 builder.Append(Query.CreateProc(proc));
             }
 
-            File.WriteAllText($"{path}\\create.sql", builder.ToString());
+            File.WriteAllText($"{path}\\create.sql", builder.ToString(), Encoding.UTF8);
         }
 
         protected void Alter()
@@ -341,7 +341,7 @@ namespace Migrate
                 builder.Append(Query.AlterProc(proc));
             }
 
-            File.WriteAllText($"{path}\\alter.sql", builder.ToString());
+            File.WriteAllText($"{path}\\alter.sql", builder.ToString(), Encoding.UTF8);
         }
 
         protected void Seed()
@@ -377,7 +377,7 @@ namespace Migrate
                 builder.Append(Query.ToggleConstraintForEach(true));
             }
 
-            File.WriteAllText($"{path}\\seed.sql", builder.ToString());
+            File.WriteAllText($"{path}\\seed.sql", builder.ToString(), Encoding.UTF8);
         }
 
         private List<string> QualifyNames(List<string> collection)
@@ -487,7 +487,7 @@ namespace Migrate
                 builder.Append("-- Nothing to update. --");
             }
 
-            File.WriteAllText($"{path}\\update.sql", builder.ToString());
+            File.WriteAllText($"{path}\\update.sql", builder.ToString(), Encoding.UTF8);
         }
 
         protected void Patch()
@@ -533,7 +533,7 @@ namespace Migrate
                 builder.Append("-- Nothing to patch. --");
             }
 
-            File.WriteAllText($"{path}\\patch.sql", builder.ToString());
+            File.WriteAllText($"{path}\\patch.sql", builder.ToString(), Encoding.UTF8);
         }
 
         // drop/add/alter any columns
