@@ -609,7 +609,7 @@ namespace Migrate
 	                i.type not in (0, 1)
                     and schema_id(object_schema_name(i.object_id)) in ({string.Join(", ", schemas)})
 	                --and t.temporal_type <> 1
-	                and i.is_unique <>  1
+	                --and i.is_unique <>  1
 	                and i.is_unique_constraint <>  1
 	                group by i.object_id, i.index_id, i.name, i.type, i.type_desc
                 ) t
