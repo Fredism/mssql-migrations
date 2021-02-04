@@ -168,7 +168,7 @@ namespace Migrate
             return string.Join("\n", new string[]
             {
                 $"IF EXISTS (SELECT * FROM sys.indexes WHERE name = '{index.name}' and object_id = OBJECT_ID('{index.qualified_table_name}'))",
-                $"DROP INDEX [{index.name}] ON {index.qualified_table_name}",
+                $"DROP INDEX [{index.name}] ON {index.qualified_table_name}\n",
             });
         }
         public static string AddPrimaryKey(SysConstraint key)
