@@ -386,22 +386,34 @@ namespace Migrate
         {
             return $@"
                 select 
-	                tt.name,
-	                tt.type_table_object_id as [object_id],
-	                tt.schema_id,
-	                schema_name = schema_name(tt.schema_id),
-	                columns = string_agg(c.name + ' ' + type_name(c.user_type_id) + 
-	                case 
-		                when type_name(c.user_type_id) like '%varchar' 
-			                then '(' + case when c.max_length = -1 then 'max' else cast(c.max_length as nvarchar) end + ')'
-		                when type_name(c.user_type_id) = 'datetime2'
-			                then '(' + cast(c.scale as nvarchar)+ ')'
-		                else '' end + ' ' +
-	                case when c.is_nullable = 1 then '' else 'not ' end + 'null', ', ')
-	                from sys.table_types tt
-	                join sys.columns c on c.object_id = tt.type_table_object_id
-                    {(schemas == null ? "" : $"where tt.schema_id in ({string.Join(", ", schemas)})")}
-	                group by tt.type_table_object_id, tt.name, tt.schema_id
+	                name,
+	                object_id,
+	                schema_id,
+	                schema_name,
+	                columns = stuff(columns, len(columns), 1, N'') from (
+                select 
+		                tt.name,
+		                tt.type_table_object_id as [object_id],
+		                tt.schema_id,
+		                schema_name = schema_name(tt.schema_id),
+		                columns = (select c.name + ' ' + type_name(c.user_type_id) + 
+					                case 
+						                when type_name(c.user_type_id) like '%varchar' 
+							                then '(' + case when c.max_length = -1 then 'max' else cast(c.max_length as nvarchar) end + ')'
+						                when type_name(c.user_type_id) = 'datetime2'
+							                then '(' + cast(c.scale as nvarchar)+ ')'
+						                else '' 
+					                end + ' ' +
+					                case 
+						                when c.is_nullable = 1 
+							                then '' 
+						                else 'not '
+					                end + 'null' + ', '
+				                from sys.columns c where c.object_id = tt.type_table_object_id for xml path(''))
+		                from sys.table_types tt
+                        {(schemas == null ? "" : $"where tt.schema_id in ({string.Join(", ", schemas)})")}
+		                group by tt.type_table_object_id, tt.name, tt.schema_id
+                ) t
             ";
         }
         public static string GetFunctions(IEnumerable<int> schemas = null)
@@ -478,26 +490,41 @@ namespace Migrate
 
                 -- unique constraints --
                 select
+	                name,
+	                object_id,
+	                parent_object_id,
+	                schema_name,
+	                table_name,
+	                type,
+	                columns = stuff(columns, len(columns), 1, N''),
+	                definition = null,
+                    is_not_trusted = null from (
+                select
 	                uq.name,
 	                uq.object_id,
                     uq.parent_object_id,
 	                schema_name = schema_name(uq.schema_id),
 	                table_name = object_name(uq.parent_object_id),
 	                uq.type,
-	                columns = string_agg('[' + c.name + '] ' +
+	                columns = (
+		                select '[' + c.name + '] ' +
 			                case when ic.is_descending_key = 0
-				                then 'asc' else 'desc' end, ', '),
+				                then 'asc' else 'desc' end + ', '
+			                from sys.index_columns ic
+			                join sys.columns c on c.column_id = ic.column_id and c.object_id = ic.object_id
+			                where ic.object_id = uq.parent_object_id and ic.index_id = uq.unique_index_id
+			                for xml path(N'')
+	                ),
 	                definition = null,
                     is_not_trusted = null
 	                from
 	                sys.key_constraints uq
-	                join sys.index_columns ic on ic.object_id = uq.parent_object_id and ic.index_id = uq.unique_index_id
-	                join sys.columns c on c.column_id = ic.column_id and c.object_id = ic.object_id
 	                join sys.tables t on t.object_id = uq.parent_object_id
 	                where uq.type = 'UQ'
 	                and t.temporal_type <> 1
                     and uq.schema_id in ({string.Join(", ", schemas)})
-	                group by uq.object_id, uq.name, uq.parent_object_id, uq.schema_id, uq.type
+	                group by uq.unique_index_id, uq.object_id, uq.name, uq.parent_object_id, uq.schema_id, uq.type
+                ) t
 
                 union
 
@@ -537,6 +564,16 @@ namespace Migrate
         {
             return $@"
                 select
+	                name,
+	                object_id,
+                    index_id,
+	                schema_name,
+	                table_name,
+	                type,
+                    type_desc,
+	                columns = concat('(', stuff(columns, len(columns), 2, N''), ')'),
+	                include = case when include is null then null else concat('(', stuff(include, len(include), 2, N''), ')') end from (
+                select
 	                i.name,
 	                i.object_id,
                     i.index_id,
@@ -544,22 +581,30 @@ namespace Migrate
 	                table_name = object_name(i.object_id),
 	                i.type,
                     i.type_desc,
-	                columns = '(' + string_agg('[' + kc.name + '] ' +
-			                case when ic.is_descending_key = 0
-				                then 'asc' else 'desc' end, ', ') + ')',
-	                include = '(' + string_agg('[' + inc.name + ']', ', ') + ')'
+	                columns = (select '[' + kc.name + '] ' +
+		                case when ic.is_descending_key = 0
+			                then 'asc' else 'desc' end + ', '
+		                from sys.index_columns ic
+		                left join sys.columns kc on kc.column_id = ic.column_id and kc.object_id = ic.object_id
+		                where ic.index_id = i.index_id and ic.object_id = i.object_id and ic.is_included_column = 0
+		                for xml path(N'')
+	                ),
+	                include = (select '[' + inc.name + ']' + ', '
+		                from sys.index_columns ic
+		                left join sys.columns inc on inc.column_id = ic.column_id and inc.object_id = ic.object_id
+		                where ic.index_id = i.index_id and ic.object_id = i.object_id and ic.is_included_column = 1
+		                for xml path(N'')
+	                )
 	                from sys.indexes i
-	                join sys.index_columns ic on ic.index_id = i.index_id and ic.object_id = i.object_id
-	                left join sys.columns kc on kc.column_id = ic.column_id and kc.object_id = ic.object_id and ic.is_included_column = 0
-	                left join sys.columns inc on inc.column_id = ic.column_id and inc.object_id = ic.object_id and ic.is_included_column = 1
 	                join sys.tables t on t.object_id = i.object_id
 	                where
-	                schema_id(object_schema_name(i.object_id)) in ({string.Join(", ", schemas)})
-	                and i.type <> 1
+	                i.type not in (0, 1)
+                    and schema_id(object_schema_name(i.object_id)) in ({string.Join(", ", schemas)})
 	                --and t.temporal_type <> 1
 	                and i.is_unique <>  1
 	                and i.is_unique_constraint <>  1
 	                group by i.object_id, i.index_id, i.name, i.type, i.type_desc
+                ) t
             ";
         }
         public static string GetLastUpdate()
