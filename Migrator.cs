@@ -496,7 +496,26 @@ namespace Migrate
             var opening = $"USE {targetDb};\n\n";
             builder.Append(opening);
 
-            // drop foreign keys not in source
+            // drop any index not in the source or different
+            var indexesToDrop = targetIndexes.Values.Where(i =>
+            {
+                var sourceIndex = sourceIndexes.Values.Where(x => x.name == i.name).FirstOrDefault();
+                if (sourceIndex == null) return true;
+                else
+                {
+                    return sourceIndex.qualified_table_name != i.qualified_table_name
+                    || sourceIndex.columns != i.columns
+                    || sourceIndex.include != i.include;
+                }
+            });
+
+            foreach(var index in indexesToDrop)
+            {
+                builder.Append(Query.DropIndex(index));
+                builder.Append(Query.BatchSeperator);
+            }
+
+            // drop foreign keys not in source or different
             var keysToDrop = targetKeys.Values.Where(k => {
                 if (!sourceObjects.ContainsKey(k.qualified_name)) return true;
                 else
@@ -506,9 +525,7 @@ namespace Migrate
                         fkey.qualified_parent_table != k.qualified_parent_table
                         || fkey.qualified_referenced_table != k.qualified_referenced_table
                         || fkey.referenced_column != k.referenced_column
-                        || fkey.parent_column != k.parent_column
-                        || fkey.schema_name != k.schema_name
-                        || fkey.referenced_schema_name != k.referenced_schema_name;
+                        || fkey.parent_column != k.parent_column;
                 }
             });
 

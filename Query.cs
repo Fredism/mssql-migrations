@@ -163,6 +163,17 @@ namespace Migrate
                 $"DROP COLUMN [{column.name}]\n"
             });
         }
+        public static string DropIndex(SysIndex index)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"IF EXISTS (SELECT * FROM sys.indexes WHERE name = '{index.name}' and object_id = OBJECT_ID('{index.qualified_table_name}'))",
+                "BEGIN",
+                $"\tALTER TABLE {index.qualified_table_name}",
+                $"\tDROP INDEX [{index.name}]",
+                "END\n"
+            });
+        }
         public static string AddPrimaryKey(SysConstraint key)
         {
             return string.Join("\n", new string[]
