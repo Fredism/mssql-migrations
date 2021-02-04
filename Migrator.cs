@@ -497,11 +497,21 @@ namespace Migrate
             builder.Append(opening);
 
             // drop foreign keys not in source
-            var excludedKeys = targetKeys.Values
-                .Select(k => k.qualified_name)
-                .Except(sourceKeys.Values.Select(k => k.qualified_name));
+            var keysToDrop = targetKeys.Values.Where(k => {
+                if (!sourceObjects.ContainsKey(k.qualified_name)) return true;
+                else
+                {
+                    var fkey = sourceKeys[sourceObjects[k.qualified_name]];
+                    return
+                        fkey.qualified_parent_table != k.qualified_parent_table
+                        || fkey.qualified_referenced_table != k.qualified_referenced_table
+                        || fkey.referenced_column != k.referenced_column
+                        || fkey.parent_column != k.parent_column
+                        || fkey.schema_name != k.schema_name
+                        || fkey.referenced_schema_name != k.referenced_schema_name;
+                }
+            });
 
-            var keysToDrop = targetKeys.Values.Where(k => excludedKeys.Contains(k.qualified_name));
             foreach (var key in keysToDrop)
             {
                 builder.Append(Query.DropForeignKey(key));
