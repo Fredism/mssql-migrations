@@ -134,10 +134,16 @@ namespace Migrate
                 while (oDr.Read())
                 {
                     T t = new T();
+                    Type type = t.GetType();
 
                     for (int inc = 0; inc < oDr.FieldCount; inc++)
                     {
-                        Type type = t.GetType();
+                        if (type.IsPrimitive)
+                        {
+                            t = (T)oDr.GetValue(0);
+                            break;
+                        }
+
                         PropertyInfo prop = type.GetProperty(oDr.GetName(inc));
 
                         if (prop != null)

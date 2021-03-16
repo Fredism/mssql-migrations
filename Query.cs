@@ -61,11 +61,10 @@ namespace Migrate
             {
                 var rowStart = columns.Find(c => c.generated_always_type == "1").name;
                 var rowEnd = columns.Find(c => c.generated_always_type == "2").name;
-                cmd.Add($"\t\t,PERIOD FOR SYSTEM_TIME ([{rowStart}], [{rowEnd}])");
+                cmd[cmd.Count() - 1] = string.Join("", cmd.Last().Append(','));
+                cmd.Add($"\t\tPERIOD FOR SYSTEM_TIME ([{rowStart}], [{rowEnd}])");
                 cmd.Add("\t)");
-                cmd.Add("WITH (");
-                cmd.Add($"SYSTEM_VERSIONING = ON ( HISTORY_TABLE = [{table.schema_name}].[{table.history_table}] )");
-                cmd.Add(")");
+                cmd.Add($"WITH (SYSTEM_VERSIONING = ON ( HISTORY_TABLE = {table.history_table} ))");
             }
             else
             {
@@ -139,6 +138,51 @@ namespace Migrate
         }
 
         // alter
+        public static string AddSystemVersioning(SysTable table)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"ALTER TABLE {table.qualified_name}",
+                $"ADD",
+                $"\tSysStartTime DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN",
+                $"\t\tCONSTRAINT [DF_{table.name}_SysStartTime] DEFAULT SYSUTCDATETIME(),",
+                $"\tSysEndTime DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN",
+                $"\t\tCONSTRAINT [DF_{table.name}_SysEndTime] DEFAULT CONVERT(DATETIME2, '9999-12-31 23:59:59.9999999'),",
+                $"\tPERIOD FOR SYSTEM_TIME (SysStartTime, SysEndTime)",
+                BatchSeperator,
+                SetSystemVersioning(table, true)
+            });
+        }
+        public static string DropSystemVersioning(SysTable table)
+        {
+            return string.Join("\n", new string[]
+            {
+                SetSystemVersioning(table, false),
+                $"ALTER TABLE {table.qualified_name}",
+                $"DROP PERIOD FOR SYSTEM_TIME",
+                BatchSeperator
+            });
+        }
+        public static string SetSystemVersioning(SysTable table, bool onOff)
+        {
+            if(onOff)
+            {
+                return string.Join("\n", new string[]
+                {
+                    $"ALTER TABLE {table.qualified_name}",
+                    $"SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = {table.history_table}))\n"
+                });
+            }
+            else
+            {
+                return string.Join("\n", new string[]
+                {
+                    $"ALTER TABLE {table.qualified_name}",
+                    $"SET (SYSTEM_VERSIONING = OFF)\n"
+                });
+            }
+            
+        }
         public static string AddColumn(SysColumn column)
         {
             return string.Join("\n", new string[]
@@ -248,6 +292,17 @@ namespace Migrate
                 "END\n"
             });
         }
+        public static string DropConstraint(SysConstraint constraint)
+        {
+            return string.Join("\n", new string[]
+            {
+                $"IF (OBJECT_ID('{constraint.qualified_name}') IS NOT NULL)",
+                "BEGIN",
+                $"\tALTER TABLE {constraint.qualified_table_name}",
+                $"\tDROP CONSTRAINT [{constraint.name}]",
+                "END\n"
+            });
+        }
         public static string AlterFunc(SysObject func)
         {
             return AlterObject(func);
@@ -332,7 +387,10 @@ namespace Migrate
                     schema_name = schema_name(t.schema_id),
                     t.create_date,
                     has_identity = (select 1 from sys.columns c where c.object_id = t.object_id and c.is_identity = '1'),
-                    history_table = object_name(t.history_table_id)
+                    history_table = case 
+                        when t.history_table_id is null then null 
+                        else concat('[', object_schema_name(t.history_table_id), '].[', object_name(t.history_table_id), ']') 
+                    end
                     from sys.tables t
                     where t.temporal_type <> 1
                     {predicate ?? ""}

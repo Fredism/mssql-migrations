@@ -263,13 +263,13 @@ namespace Migrate
             {
                 builder.Append(Query.CreateTableType(tt));
             }
-            foreach (var func in sourceFuncs.Values)
-            {
-                builder.Append(Query.CreateFunction(func));
-            }
             foreach (var view in sourceViews.Values)
             {
                 builder.Append(Query.CreateView(view));
+            }
+            foreach (var func in sourceFuncs.Values)
+            {
+                builder.Append(Query.CreateFunction(func));
             }
             foreach (var proc in sourceProcs.Values)
             {
@@ -322,17 +322,17 @@ namespace Migrate
                 builder.Append(Query.BatchSeperator);
             }
 
-            // funcs
-            foreach (var func in sourceFuncs.Values)
-            {
-                //if (!ObjectChanged(func, targetFuncs)) continue;
-                builder.Append(Query.AlterFunc(func));
-            }
             // views
             foreach (var view in sourceViews.Values)
             {
                 //if (!ObjectChanged(view, targetViews)) continue;
                 builder.Append(Query.AlterView(view));
+            }
+            // funcs
+            foreach (var func in sourceFuncs.Values)
+            {
+                //if (!ObjectChanged(func, targetFuncs)) continue;
+                builder.Append(Query.AlterFunc(func));
             }
             // procs
             foreach (var proc in sourceProcs.Values)
@@ -444,7 +444,8 @@ namespace Migrate
 
                     // only perform update on tables w/ primary keys
                     if (columns.All(c => c.primary_key == null)) continue;
-                    else if (rows == null || rows.Count() == 0) continue;
+                    // don't update on empty
+                    else if (rows == null || rows.Count() == 0 || IsTargetEmpty(table)) continue;
 
                     toUpdate.Add(table, rows);
                     AddData(dbData.Update, table, rows);
@@ -452,6 +453,15 @@ namespace Migrate
             }
 
             return toUpdate;
+        }
+
+        private bool IsTargetEmpty(SysTable table)
+        {
+            return Helpers
+                .ExecuteCommand<bool>(
+                    new SqlCommand($"select case when not exists (select top(1) * from {table.qualified_name}) then cast(1 as bit) else cast(0 as bit) end"),
+                    targetConn)
+                .FirstOrDefault();
         }
 
         protected void Update()
@@ -515,6 +525,23 @@ namespace Migrate
                 builder.Append(Query.BatchSeperator);
             }
 
+            var constraintsToDrop = targetConstraints.Values.Where(targetConstraint =>
+            {
+                // ignore all primary keys until you can drop the table and its dependencies
+                if (targetConstraint.type == Enumerations.GetDescription(SQLTypes.PrimaryKey)) return false;
+
+                var sourceConstraint = sourceObjects.ContainsKey(targetConstraint.qualified_name) ? sourceConstraints[sourceObjects[targetConstraint.qualified_name]] : null;
+
+                if (sourceConstraint == null) return true;
+                else return sourceConstraint.columns != targetConstraint.columns;
+            });
+
+            foreach(var constraint in constraintsToDrop)
+            {
+                builder.Append(Query.DropConstraint(constraint));
+                builder.Append(Query.BatchSeperator);
+            }
+
             // drop foreign keys not in source or different
             var keysToDrop = targetKeys.Values.Where(k => {
                 if (!sourceObjects.ContainsKey(k.qualified_name)) return true;
@@ -553,6 +580,7 @@ namespace Migrate
                 builder.Append(Query.BatchSeperator);
             }
 
+            PatchTemporalTables(builder);
             PatchColumns(builder);
 
             if (builder.ToString() == opening)
@@ -561,6 +589,52 @@ namespace Migrate
             }
 
             File.WriteAllText($"{path}\\patch.sql", builder.ToString(), Encoding.UTF8);
+        }
+
+        private void PatchTemporalTables(StringBuilder builder)
+        {
+            var temporalTablesAdd = new List<SysTable>();
+            var temporalTablesDrop = new List<SysTable>();
+            var temporalTablesSet = new List<SysTable>();
+
+            foreach (var targetTable in targetTables.Values)
+            {
+                var sourceTable = sourceObjects.ContainsKey(targetTable.qualified_name) ? sourceTables[sourceObjects[targetTable.qualified_name]] : null;
+
+                if (sourceTable == null) continue;
+
+                if (string.IsNullOrEmpty(targetTable.history_table) && !string.IsNullOrEmpty(sourceTable.history_table))
+                {
+                    temporalTablesAdd.Add(sourceTable);
+                }
+                else if (!string.IsNullOrEmpty(targetTable.history_table))
+                {
+                    if (string.IsNullOrEmpty(sourceTable.history_table))
+                    {
+                        temporalTablesDrop.Add(sourceTable);
+                    }
+                    else if (sourceTable.history_table != targetTable.history_table)
+                    {
+                        temporalTablesSet.Add(sourceTable);
+                    }
+                }
+            }
+
+            foreach (var table in temporalTablesAdd)
+            {
+                builder.Append(Query.AddSystemVersioning(table));
+                builder.Append(Query.BatchSeperator);
+            }
+            foreach (var table in temporalTablesDrop)
+            {
+                builder.Append(Query.DropSystemVersioning(table));
+                builder.Append(Query.BatchSeperator);
+            }
+            foreach (var table in temporalTablesSet)
+            {
+                builder.Append(Query.SetSystemVersioning(table, true));
+                builder.Append(Query.BatchSeperator);
+            }
         }
 
         // drop/add/alter any columns
@@ -574,9 +648,10 @@ namespace Migrate
             {
                 var sourceId = sourceObjects[tableName];
                 var targetId = targetObjects[tableName];
+                var sourceTable = sourceTables[sourceId];
 
-                var sourceCols = sourceColumns[sourceId];
-                var targetCols = targetColumns[targetId];
+                var sourceCols = sourceColumns[sourceId].Where(c => c.generated_always_type == "0");
+                var targetCols = targetColumns[targetId].Where(c => c.generated_always_type == "0" || string.IsNullOrEmpty(sourceTable.history_table));
 
                 var sourceColDictionary = sourceCols.ToDictionary(c => c.name);
                 var targetColDictionary = targetCols.ToDictionary(c => c.name);
@@ -836,6 +911,7 @@ namespace Migrate
         private void MapSourceModels()
         {
             MapTables(sourceTables.Values, sourceObjects, sourceTypes);
+            MapConstraints(sourceConstraints.Values, sourceObjects, sourceTypes);
             MapForeignKeys(sourceKeys.Values, sourceObjects, sourceTypes);
             MapSourceObjects(sourceFuncs.Values);
             MapSourceObjects(sourceProcs.Values);
@@ -845,6 +921,7 @@ namespace Migrate
         private void MapTargetModels()
         {
             MapTables(targetTables.Values, targetObjects, targetTypes);
+            MapConstraints(targetConstraints.Values, targetObjects, targetTypes);
             MapForeignKeys(targetKeys.Values, targetObjects, targetTypes);
             MapTargetObjects(targetFuncs.Values);
             MapTargetObjects(targetProcs.Values);
@@ -857,6 +934,15 @@ namespace Migrate
             {
                 objectDict[@object.qualified_name] = @object.object_id;
                 typeDict[@object.object_id] = Enumerations.GetDescription(SQLTypes.UserTable);
+            }
+        }
+
+        private void MapConstraints(IEnumerable<SysConstraint> constraints, Dictionary<string, string> objectDict, Dictionary<string, string> typeDict)
+        {
+            foreach (var @object in constraints)
+            {
+                objectDict[@object.qualified_name] = @object.object_id;
+                typeDict[@object.object_id] = @object.type;
             }
         }
 

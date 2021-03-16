@@ -12,6 +12,8 @@ namespace Migrate.Models
         public string schema_name { get; set; }
         public string has_identity { get; set; }
         public string history_table { get; set; }
+        public DateTime create_date { get; set; }
+        //public DateTime? modify_date { get; set; }
 
         public string qualified_name
         {
