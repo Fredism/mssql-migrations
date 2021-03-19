@@ -678,21 +678,30 @@ namespace Migrate
             return $@"
                 select
                     o.object_id[id],
-                    (
-                        select max(dates) from
-                        (
-                            select dates = max(us.last_user_update)
-                            union
-                            select dates = max(stats_date(id, indid))
-                        ) as dateAcross
-                    ) as date
-                    from sys.sysindexes i
-                    join sys.objects o on i.id = o.object_id
+	                us.last_user_update[date]
+                    from sys.objects o
                     join sys.dm_db_index_usage_stats us on us.object_id = o.object_id and us.database_id = db_id(db_name())
-                    where o.type = 'U' and 
-                        (stats_date(id, indid) is not null or us.last_user_update is not null)
-                    group by o.object_id
+                    where o.type = 'U' and us.last_user_update is not null
+                    group by o.object_id, us.last_user_update
             ";
+            //return $@"
+            //    select
+            //        o.object_id[id],
+            //        (
+            //            select max(dates) from
+            //            (
+            //                select dates = max(us.last_user_update)
+            //                union
+            //                select dates = max(stats_date(id, indid))
+            //            ) as dateAcross
+            //        ) as date
+            //        from sys.sysindexes i
+            //        join sys.objects o on i.id = o.object_id
+            //        join sys.dm_db_index_usage_stats us on us.object_id = o.object_id and us.database_id = db_id(db_name())
+            //        where o.type = 'U' and 
+            //            (stats_date(id, indid) is not null or us.last_user_update is not null)
+            //        group by o.object_id
+            //";
         }
 
         // misc
