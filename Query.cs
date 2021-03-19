@@ -386,12 +386,15 @@ namespace Migrate
                     t.schema_id,
                     schema_name = schema_name(t.schema_id),
                     t.create_date,
+                    t.modify_date,
+                    us.last_user_update [update_date],
                     has_identity = (select 1 from sys.columns c where c.object_id = t.object_id and c.is_identity = '1'),
                     history_table = case 
                         when t.history_table_id is null then null 
                         else concat('[', object_schema_name(t.history_table_id), '].[', object_name(t.history_table_id), ']') 
                     end
                     from sys.tables t
+                        left join sys.dm_db_index_usage_stats us on us.object_id = t.object_id and us.database_id = db_id(db_name()) and us.index_id = 1
                     where t.temporal_type <> 1
                     {predicate ?? ""}
                     order by t.create_date
@@ -681,7 +684,7 @@ namespace Migrate
 	                us.last_user_update[date]
                     from sys.objects o
                     join sys.dm_db_index_usage_stats us on us.object_id = o.object_id and us.database_id = db_id(db_name())
-                    where o.type = 'U' and us.last_user_update is not null
+                    where o.type = 'U' and us.last_user_update is not null and us.index_id = 1
                     group by o.object_id, us.last_user_update
             ";
             //return $@"

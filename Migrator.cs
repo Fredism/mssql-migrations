@@ -88,6 +88,7 @@ namespace Migrate
         private Dictionary<string, SysObject> targetViews;
 
         private DbData dbData = new DbData();
+        private Dictionary<SysTable, RowCollection> dbUpdates = null;
 
         private List<int> dataSchemaIds
         {
@@ -356,7 +357,7 @@ namespace Migrate
             foreach (var table in tables)
             {
                 var columns = sourceColumns[table.object_id];
-                var rows = GetSeedData(table);
+                var rows = GetTableData(table);
 
                 // only seed tables w/ primary keys
                 if (columns.All(c => c.primary_key == null)) continue;
@@ -391,7 +392,7 @@ namespace Migrate
             }).ToList();
         }
 
-        private RowCollection GetSeedData(SysTable table)
+        private RowCollection GetTableData(SysTable table)
         {
             if(usingSourceFile)
             {
@@ -401,58 +402,47 @@ namespace Migrate
             return Query.ConvertRows(rows);
         }
 
-        private RowCollection GetUpdateData(SysTable table)
-        {
-            if (usingSourceFile)
-            {
-                return dbData.Update.GetValueOrDefault(table.qualified_name);
-            }
-            var rows = Helpers.ExecuteCommandToDictionary(new SqlCommand($"select * from {table.qualified_name}"), sourceConn);
-            return Query.ConvertRows(rows);
-        }
-
         private Dictionary<SysTable, RowCollection> GetTablesToUpdate()
         {
-            if(usingSourceFile || dbData.Update.Any())
-            {
-                return dbData.Update.ToDictionary(pair => sourceTables[sourceObjects[pair.Key]], pair => pair.Value);
-            }
+            if (dbUpdates != null)
+                return dbUpdates;
 
-            var toUpdate = new Dictionary<SysTable, RowCollection>();
-            if(sourceUpdates == null) sourceUpdates = GetLastTableUpdates(sourceConn);
-            if(targetUpdates == null) targetUpdates = GetLastTableUpdates(targetConn);
+            dbUpdates = new Dictionary<SysTable, RowCollection>();
+            if(sourceUpdates == null) sourceUpdates = GetLastTableUpdates(sourceTables.Values);
+            if(targetUpdates == null) targetUpdates = GetLastTableUpdates(targetTables.Values);
 
-            var tables = dataTables;
-            foreach (var table in tables)
+            foreach (var table in dataTables)
             {
                 if (!sourceUpdates.ContainsKey(table.object_id)) continue; // ignore this table
                 else if (!targetObjects.ContainsKey(table.qualified_name)) continue; // target hasn't created this table
-                else if (!targetUpdates.ContainsKey(targetObjects[table.qualified_name])) continue; // target has never been updated, should seed, update would be slow
-                //else if (!targetUpdates.ContainsKey(targetObjects[table.qualified_name]))
-                //{
-                //    toUpdate.Add(table);
-                //    continue;
-                //}
+
+                var isTargetEmpty = IsTargetEmpty(table);
+                if (!targetUpdates.ContainsKey(targetObjects[table.qualified_name]) && isTargetEmpty) continue; // target has never been updated + is empty, should seed, update would be slow
 
                 var sourceUpdate = sourceUpdates[table.object_id];
-                var targetUpdate = targetUpdates[targetObjects[table.qualified_name]];
+                var targetUpdate = targetUpdates.ContainsKey(targetObjects[table.qualified_name])? 
+                    targetUpdates[targetObjects[table.qualified_name]]: (DateTime?)null;
 
-                if (targetUpdate <= sourceUpdate)
+                if (targetUpdate == null || targetUpdate <= sourceUpdate)
                 {
                     var columns = sourceColumns[table.object_id];
-                    var rows = GetUpdateData(table);
+                    var rows = GetTableData(table);
 
                     // only perform update on tables w/ primary keys
                     if (columns.All(c => c.primary_key == null)) continue;
                     // don't update on empty
-                    else if (rows == null || rows.Count() == 0 || IsTargetEmpty(table)) continue;
+                    else if (rows == null || rows.Count() == 0 || isTargetEmpty) continue;
 
-                    toUpdate.Add(table, rows);
-                    AddData(dbData.Update, table, rows);
+                    dbUpdates.Add(table, rows);
+                    
+                    if (settings.ToJSON)
+                    {
+                        AddData(dbData.Update, table, rows);
+                    }
                 }
             }
 
-            return toUpdate;
+            return dbUpdates;
         }
 
         private bool IsTargetEmpty(SysTable table)
@@ -708,10 +698,15 @@ namespace Migrate
             }
         }
 
-        private Dictionary<string, DateTime> GetLastTableUpdates(string conn)
+        //private Dictionary<string, DateTime> GetLastTableUpdates(string conn)
+        //{
+        //    var cmd = new SqlCommand(Query.GetLastUpdate());
+        //    return Helpers.ExecuteCommand<DateValue>(cmd, conn).ToDictionary(u => u.id, u => u.date);
+        //}
+
+        private Dictionary<string, DateTime> GetLastTableUpdates(IEnumerable<SysTable> tables)
         {
-            var cmd = new SqlCommand(Query.GetLastUpdate());
-            return Helpers.ExecuteCommand<DateValue>(cmd, conn).ToDictionary(u => u.id, u => u.date);
+            return tables.Where(t => t.update_date.HasValue).ToDictionary(t => t.object_id, t => (DateTime)t.update_date);
         }
 
         private void AddData(DataDictionary dict, SysTable table, RowCollection rows)
