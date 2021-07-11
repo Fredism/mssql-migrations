@@ -18,8 +18,9 @@ namespace Migrate.Models
         public IDictionary<string, SysConstraint> Constraints { get; set; }
         public IDictionary<string, SysIndex> Indexes { get; set; }
         public IDictionary<string, SysTableType> TableTypes { get; set; }
-        public IDictionary<string, SysObject> Procedures { get; set; }
         public IDictionary<string, SysObject> Functions { get; set; }
         public IDictionary<string, SysObject> Views { get; set; }
+        public IDictionary<string, SysObject> Procedures { get; set; }
+        public IList<SysDependency> Dependencies { get; set; }
     }
 }

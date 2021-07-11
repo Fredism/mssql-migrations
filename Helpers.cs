@@ -10,7 +10,7 @@ using System.Text.RegularExpressions;
 
 namespace Migrate
 {
-    class Enumerations
+    static class Enumerations
     {
         public static string GetDescription(Enum value)
         {
@@ -22,6 +22,11 @@ namespace Migrate
                     ?.GetCustomAttribute<DescriptionAttribute>()
                     ?.Description
                 ?? value.ToString();
+        }
+
+        public static string Description(this Enum value)
+        {
+            return GetDescription(value);
         }
     }
     class Helpers

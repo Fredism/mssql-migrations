@@ -80,15 +80,18 @@ namespace Migrate
         private Dictionary<string, SysIndex> targetIndexes;
         private Dictionary<string, SysTableType> sourceTableTypes;
         private Dictionary<string, SysTableType> targetTableTypes;
-        private Dictionary<string, SysObject> sourceProcs;
-        private Dictionary<string, SysObject> targetProcs;
         private Dictionary<string, SysObject> sourceFuncs;
         private Dictionary<string, SysObject> targetFuncs;
         private Dictionary<string, SysObject> sourceViews;
         private Dictionary<string, SysObject> targetViews;
+        private Dictionary<string, SysObject> sourceProcs;
+        private Dictionary<string, SysObject> targetProcs;
+        private List<SysDependency> sourceDependencies;
 
         private DbData dbData = new DbData();
-        private Dictionary<SysTable, RowCollection> dbUpdates = null;
+        private Dictionary<SysTable, RowCollection> dbUpdates;
+        private Dictionary<string, HashSet<string>> dbDependencies;
+        private Dictionary<string, bool> isGenerated;
 
         private List<int> dataSchemaIds
         {
@@ -229,6 +232,7 @@ namespace Migrate
             LoadFunctions();
             LoadProcedures();
             LoadViews();
+            LoadDependencies();
             MapModels();
         }
 
@@ -248,36 +252,91 @@ namespace Migrate
             foreach (var schema in sourceSchemas.Keys)
             {
                 builder.Append(Query.CreateSchema(schema));
-                builder.Append(Query.BatchSeperator);
-            }
-            var tables = sourceTables.Values;
-            foreach (var table in tables)
-            {
-                builder.Append(Query.CreateTable(table, sourceColumns[table.object_id]));
-                builder.Append(Query.BatchSeperator);
-            }
-            foreach (var index in sourceIndexes.Values)
-            {
-                builder.Append(Query.CreateIndex(index));
             }
             foreach (var tt in sourceTableTypes.Values)
             {
                 builder.Append(Query.CreateTableType(tt));
             }
-            foreach (var view in sourceViews.Values)
-            {
-                builder.Append(Query.CreateView(view));
-            }
-            foreach (var func in sourceFuncs.Values)
+            foreach (var func in sourceFuncs.Values.Where(f => f.type != SQLTypes.InlineTableFunction.Description()))
             {
                 builder.Append(Query.CreateFunction(func));
             }
+            foreach (var table in sourceTables.Values)
+            {
+                builder.Append(Query.CreateTable(table, sourceColumns[table.object_id]));
+            }
+            foreach (var index in sourceIndexes.Values)
+            {
+                builder.Append(Query.CreateIndex(index));
+            }
+            
+            foreach (var func in sourceFuncs.Values.Where(f => f.type == SQLTypes.InlineTableFunction.Description()))
+            {
+                RecursiveCreate(builder, func);
+            }
+            foreach (var view in sourceViews.Values)
+            {
+                RecursiveCreate(builder, view);
+            }
             foreach (var proc in sourceProcs.Values)
             {
-                builder.Append(Query.CreateProc(proc));
+                RecursiveCreate(builder, proc);
             }
 
             File.WriteAllText($"{path}\\create.sql", builder.ToString(), Encoding.UTF8);
+        }
+
+        private void RecursiveCreate(StringBuilder builder, SysObject @object) {
+            if(isGenerated[@object.object_id])
+            {
+                return;
+            }
+            else if(dbDependencies.ContainsKey(@object.object_id))
+            {
+                var dependencies = dbDependencies[@object.object_id].Select(id =>
+                {
+                    var type = sourceTypes[id];
+                    if (type == SQLTypes.InlineTableFunction.Description())
+                    {
+                        return sourceFuncs[id];
+                    }
+                    else if (type == SQLTypes.View.Description())
+                    {
+                        return sourceViews[id];
+                    }
+                    else if (type == SQLTypes.StoredProcedure.Description())
+                    {
+                        return sourceProcs[id];
+                    }
+
+                    return null; // should not get here
+                });
+                foreach(var dep in dependencies)
+                {
+                    RecursiveCreate(builder, dep);
+                }
+            }
+
+            CreateByType(builder, @object);
+            isGenerated[@object.object_id] = true;
+        }
+        private void CreateByType(StringBuilder builder, SysObject @object)
+        {
+
+            string query = null;
+            if(@object.type == SQLTypes.InlineTableFunction.Description())
+            {
+                query = Query.CreateFunction(@object);
+            }
+            else if(@object.type == SQLTypes.View.Description())
+            {
+                query = Query.CreateView(@object);
+            }
+            else if (@object.type == SQLTypes.StoredProcedure.Description())
+            {
+                query = Query.CreateProc(@object);
+            }
+            if(query != null) builder.Append(query);
         }
 
         protected void Alter()
@@ -897,6 +956,20 @@ namespace Migrate
             MapTargetModels();
         }
 
+        private void LoadDependencies()
+        {
+            var cmd = new SqlCommand(Query.GetDependencies());
+            sourceDependencies = Helpers.ExecuteCommand<SysDependency>(cmd, sourceConn);
+        }
+
+        private void InitDependencies()
+        {
+            dbDependencies = sourceDependencies.GroupBy(x => x.id).ToDictionary(g => g.Key, g => g.ToList().Select(x => x.depid).ToHashSet());
+            isGenerated = sourceFuncs.Keys.Where(f => sourceTypes[f] == SQLTypes.InlineTableFunction.Description())
+                .Union(sourceViews.Keys).Union(sourceProcs.Keys)
+                .ToDictionary(id => id, id => false);
+        }
+
         private void MapModels()
         {
             MapSourceModels();
@@ -911,6 +984,7 @@ namespace Migrate
             MapSourceObjects(sourceFuncs.Values);
             MapSourceObjects(sourceProcs.Values);
             MapSourceObjects(sourceViews.Values);
+            InitDependencies();
         }
 
         private void MapTargetModels()
@@ -999,6 +1073,7 @@ namespace Migrate
             sourceProcs = (Dictionary<string, SysObject>)dbModel.Procedures;
             sourceFuncs = (Dictionary<string, SysObject>)dbModel.Functions;
             sourceViews = (Dictionary<string, SysObject>)dbModel.Views;
+            sourceDependencies = (List<SysDependency>)dbModel.Dependencies;
             MapSourceModels();
         }
 
@@ -1019,9 +1094,10 @@ namespace Migrate
             dbModel.Constraints = sourceConstraints;
             dbModel.Indexes = sourceIndexes;
             dbModel.TableTypes = sourceTableTypes;
-            dbModel.Procedures = sourceProcs;
             dbModel.Functions = sourceFuncs;
             dbModel.Views = sourceViews;
+            dbModel.Procedures = sourceProcs;
+            dbModel.Dependencies = sourceDependencies;
             dbModel.Database = new DbModel.DbInfo()
             {
                 Name = sourceDb,

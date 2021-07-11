@@ -19,7 +19,8 @@ namespace Migrate
                 $"IF NOT EXISTS (SELECT schema_id FROM sys.schemas WHERE name = '{schema}')",
                 "BEGIN",
                 $"\tEXEC sp_executesql N'CREATE SCHEMA {schema}'",
-                "END\n"
+                "END",
+                BatchSeperator
             });
         }
         //public static string CreateTable(SysTable table, SysColumn[] columns)
@@ -70,8 +71,8 @@ namespace Migrate
             {
                 cmd.Add("\t)");
             }
-            cmd.Add("END\n");
-
+            cmd.Add("END");
+            cmd.Add(BatchSeperator);
 
             return string.Join("\n", cmd);
         }
@@ -509,7 +510,7 @@ namespace Migrate
 	                object_definition = object_definition(object_id),
 	                schema_id,
 	                schema_name = schema_name(schema_id),
-                    type,
+                    type = rtrim(type),
 	                create_date,
 	                modify_date
 	                from sys.objects
@@ -525,7 +526,7 @@ namespace Migrate
 	                object_definition = object_definition(object_id),
 	                schema_id,
 	                schema_name = schema_name(schema_id),
-                    type,
+                    type = rtrim(type),
 	                create_date,
 	                modify_date
 	                from sys.objects
@@ -674,6 +675,20 @@ namespace Migrate
 	                and i.is_unique_constraint <>  1
 	                group by i.object_id, i.index_id, i.name, i.type, i.type_desc
                 ) t
+            ";
+        }
+        public static string GetDependencies()
+        {
+            return $@"
+                select distinct
+                    o.object_id [id], 
+                    --o.name,
+                    d.object_id [depid]
+                    --,d.name [depname]
+                    from sys.sysdepends x
+                    join sys.objects o ON x.id = o.object_id
+                    join sys.objects d ON x.depid = d.object_id
+                    where o.type in ('IF', 'V', 'P') and d.type in ('IF', 'V', 'P')
             ";
         }
         public static string GetLastUpdate()
