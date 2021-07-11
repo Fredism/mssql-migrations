@@ -26,7 +26,7 @@ namespace Migrate
 
             config = builder.Build();
 
-            var settings = config.GetSection("AppSettings").Get<AppSettings>();
+            var settings = config.Get<AppSettings>();
 
             if (!string.IsNullOrEmpty(settings.Path))
             {
