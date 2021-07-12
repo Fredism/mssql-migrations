@@ -13,10 +13,6 @@ class AppSettings {
 	[ConnectionStrings] $ConnectionStrings
 }
 
-class JsonConfig {
-	[AppSettings] $AppSettings
-}
-
 function Execute {
 	param([string] $cmd)
 	sqlcmd -I -S $server -U $user -P $password -b -i ".\$cmd.sql" -o ".\logs\$cmd.log" -f 65001
@@ -32,9 +28,9 @@ $dbInfo = @{}
 
 Add-Type -AssemblyName System.Web.Extensions
 $serializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-$content = $serializer.Deserialize((Get-Content -Path $path), [JsonConfig])
+$content = $serializer.Deserialize((Get-Content -Path $path), [AppSettings])
 
-$content.AppSettings.ConnectionStrings.Target -split ";" | ForEach-Object {
+$content.ConnectionStrings.Target -split ";" | ForEach-Object {
 	$parts = $_ -split "="
 	$key = $parts[0]
 	$value = $parts[1]
