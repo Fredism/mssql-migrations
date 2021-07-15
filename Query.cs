@@ -411,13 +411,15 @@ namespace Migrate
 		            schema_name = object_schema_name(c.object_id),
 		            data_type = type_name(c.user_type_id),
 		            max_length = case 
-                        when type_name(c.user_type_id) = 'datetime2' then scale
-						when type_name(c.user_type_id) like 'n%char%' and max_length <> -1 then max_length / 2
-                        else max_length end,
+                        when type_name(c.user_type_id) = 'datetime2' then c.scale
+						when type_name(c.user_type_id) like 'n%char%' and c.max_length <> -1 then c.max_length / 2
+                        else c.max_length end,
                     precision = c.precision,
 					scale = c.scale,
-		            is_nullable,
-		            is_identity,
+		            c.is_nullable,
+		            c.is_identity,
+					c.is_computed,
+					cc.definition,
 		            primary_key = i.name,
 		            index_type_desc = i.type_desc,
                     c.generated_always_type,
@@ -425,6 +427,7 @@ namespace Migrate
 		            default_constraint_definition = cast(dc.definition as varchar(max))
 		            from sys.columns c
 		            join sys.tables t on t.object_id = c.object_id
+					left join sys.computed_columns cc on cc.object_id = c.object_id and cc.column_id = c.column_id
 		            left join sys.index_columns ic on ic.object_id = c.object_id and ic.column_id = c.column_id and ic.index_id = 1
 		            left join sys.indexes i on i.object_id = c.object_id and i.index_id = ic.index_column_id and i.is_primary_key = 1
 		            left join sys.default_constraints dc on dc.object_id = c.default_object_id

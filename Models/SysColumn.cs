@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace Migrate.Models
 {
@@ -20,6 +18,8 @@ namespace Migrate.Models
             clone.scale = og.scale;
             clone.is_nullable = og.is_nullable;
             clone.is_identity = og.is_identity;
+            clone.is_computed = og.is_computed;
+            clone.definition = og.definition;
             clone.primary_key = og.primary_key;
             clone.index_type_desc = og.index_type_desc;
             clone.generated_always_type = og.generated_always_type;
@@ -39,6 +39,8 @@ namespace Migrate.Models
         public string scale { get; set; }
         public string is_nullable { get; set; }
         public string is_identity { get; set; }
+        public string is_computed { get; set; }
+        public string definition { get; set; }
         public string primary_key { get; set; }
         public string index_type_desc { get; set; }
         public string generated_always_type { get; set; }
@@ -100,8 +102,7 @@ namespace Migrate.Models
         {
             get
             {
-                bool isIdentity = Convert.ToBoolean(is_identity);
-                return isIdentity ? "IDENTITY(1, 1) " : "";
+                return Convert.ToBoolean(is_identity) ? "IDENTITY(1, 1) " : "";
             }
         }
 
@@ -117,6 +118,7 @@ namespace Migrate.Models
         {
             get
             {
+                if (Convert.ToBoolean(is_computed)) return $"[{name}] AS {definition}";
                 return $"[{name}] {type_definition} {identity_definition}{generability}{nullability}{constraint_definition}";
             }
         }
